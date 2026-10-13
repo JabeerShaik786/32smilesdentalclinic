@@ -4,10 +4,8 @@ export const getAssetPath = (path: string): string => {
     return path;
   }
 
-  const envBasePath = process.env.NEXT_PUBLIC_BASE_PATH;
-  const isProd = process.env.NODE_ENV === "production";
-  const defaultBasePath = isProd ? "/32smilesdentalclinic" : "";
-  const basePath = envBasePath !== undefined ? envBasePath : defaultBasePath;
+  // Root-relative by default for production domain (32smilesdentalclinic.com)
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH || "";
 
   // Split query and hash if present
   const [baseAndQuery, ...hashParts] = path.split("#");

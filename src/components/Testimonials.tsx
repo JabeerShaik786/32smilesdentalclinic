@@ -17,7 +17,7 @@ const TESTIMONIALS_DATA: TestimonialCardData[] = [
   {
     id: 1,
     name: "Rajesh Kumar",
-    avatar: "/figma/avatar_srinivas.png",
+    avatar: "/avatar_srinivas.png",
     treatment: "Dental Implants",
     quote:
       "Had a wonderful experience at 32 Smiles Multispeciality Dental Clinic. I got two dental implants done here, and the entire procedure was completely pain-free and smoothly handled. The doctors and clinic staff were extremely supportive and professional.",
@@ -25,7 +25,7 @@ const TESTIMONIALS_DATA: TestimonialCardData[] = [
   {
     id: 2,
     name: "Sneha Reddy",
-    avatar: "/figma/avatar_lakshmi.jpg",
+    avatar: "/avatar_lakshmi.jpg",
     treatment: "Clear Aligners & Teeth Alignment",
     quote:
       "Visited 32 Smiles for teeth alignment consultation. The doctor explained the clear aligners process in detail using 3D scans. The results have been incredible, and my confidence in my smile has improved tremendously. Truly top-notch care!",
@@ -33,7 +33,7 @@ const TESTIMONIALS_DATA: TestimonialCardData[] = [
   {
     id: 3,
     name: "Karthik Verma",
-    avatar: "/figma/avatar_bhargav.png",
+    avatar: "/avatar_bhargav.png",
     treatment: "Root Canal & Ceramic Crown",
     quote:
       "I was terrified of getting a root canal, but the team at 32 Smiles Multispeciality Dental Clinic made it feel like a breeze! No pain, modern equipment, and pristine hygiene. Highly recommend them for anyone seeking quality dental treatment.",
@@ -41,7 +41,7 @@ const TESTIMONIALS_DATA: TestimonialCardData[] = [
   {
     id: 4,
     name: "Sunita Sharma",
-    avatar: "/figma/avatar_test1.png",
+    avatar: "/avatar_test1.png",
     treatment: "Teeth Whitening & Cleaning",
     quote:
       "Excellent service and very warm staff. Got professional teeth whitening and cleaning done for my wedding. The results exceeded my expectations. The clinic is spotless and equipped with the latest dental technology.",
@@ -49,7 +49,7 @@ const TESTIMONIALS_DATA: TestimonialCardData[] = [
   {
     id: 5,
     name: "M. Durga Prasad",
-    avatar: "/figma/avatar_durgaprasad.jpg",
+    avatar: "/avatar_durgaprasad.jpg",
     treatment: "Wisdom Tooth Removal",
     quote:
       "Got my impacted wisdom tooth extracted at 32 Smiles Dental Clinic. The surgeon was exceptionally skilled and the recovery was very fast without any complications. Reasonable pricing and very courteous team.",
@@ -57,7 +57,7 @@ const TESTIMONIALS_DATA: TestimonialCardData[] = [
   {
     id: 6,
     name: "K. Satyanarayana",
-    avatar: "/figma/avatar_satyanarayana.jpg",
+    avatar: "/avatar_satyanarayana.jpg",
     treatment: "Full Mouth Rehabilitation",
     quote:
       "The best multispeciality dental clinic in town. I took my elderly parents here for dentures and full mouth rehabilitation. The doctors treat patients with patience, empathy, and utmost dedication.",
