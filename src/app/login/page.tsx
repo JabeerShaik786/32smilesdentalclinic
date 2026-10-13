@@ -57,16 +57,23 @@ export default function LoginPage() {
     setApiError(null);
 
     try {
-      const { error } = await supabase.auth.signInWithPassword({
+      const { data: authData, error } = await supabase.auth.signInWithPassword({
         email: data.email,
         password: data.password,
       });
 
       if (error) {
-        if (error.message.toLowerCase().includes("invalid login credentials")) {
-          setApiError("Invalid email or password. Please try again.");
+        const rawMsg = error.message || "";
+        const msg = rawMsg.toLowerCase();
+
+        if (msg.includes("invalid login credentials")) {
+          setApiError("Invalid email or password. Please check your credentials and try again.");
+        } else if (msg.includes("email not confirmed")) {
+          setApiError("Your email address is unconfirmed. Please verify your email or confirm your user in Supabase Auth.");
+        } else if (msg.includes("api key") || msg.includes("apikey") || msg.includes("jwt")) {
+          setApiError("Authentication key error. Please check your Supabase API credentials.");
         } else {
-          setApiError("An authentication error occurred. Please check your credentials.");
+          setApiError(rawMsg || "An authentication error occurred. Please check your credentials.");
         }
         setIsLoading(false);
       } else {
@@ -74,10 +81,10 @@ export default function LoginPage() {
         setIsLoading(false);
         setTimeout(() => {
           router.push("/dashboard");
-        }, 1800);
+        }, 1200);
       }
-    } catch {
-      setApiError("A network error occurred. Please try again later.");
+    } catch (err: any) {
+      setApiError(err?.message || "A network error occurred. Please try again later.");
       setIsLoading(false);
     }
   };

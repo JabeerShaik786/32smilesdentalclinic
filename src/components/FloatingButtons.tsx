@@ -5,9 +5,9 @@ import { motion } from "framer-motion";
 export default function FloatingButtons() {
   return (
     <>
-      {/* Floating WhatsApp Button - Matching Figma Design (Green circle with white border & shadow) */}
+      {/* Floating WhatsApp Button */}
       <motion.a
-        href="https://wa.me/919885349798?text=Hello%20VR%20Dental%20Care,%20I%20would%20like%20to%20book%20an%20appointment."
+        href="https://wa.me/918143148485"
         target="_blank"
         rel="noopener noreferrer"
         initial={{ scale: 0, opacity: 0 }}
@@ -16,8 +16,8 @@ export default function FloatingButtons() {
         whileHover={{ scale: 1.08 }}
         whileTap={{ scale: 0.95 }}
         className="fixed bottom-6 right-5 sm:right-8 z-50 flex items-center justify-center w-[54px] h-[54px] bg-[#25D366] rounded-full border-2 border-white shadow-[0_8px_24px_rgba(0,0,0,0.22)] text-white cursor-pointer hover:bg-[#20bd5a] transition-all duration-200"
-        title="Chat on WhatsApp"
-        aria-label="Chat on WhatsApp"
+        title="Chat on WhatsApp: 081431 48485"
+        aria-label="Chat on WhatsApp: 081431 48485"
       >
         <svg
           className="w-7 h-7 fill-white"

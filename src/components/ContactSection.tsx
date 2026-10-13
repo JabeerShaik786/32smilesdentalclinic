@@ -36,14 +36,14 @@ function ContactCard({ icon: Icon, title, details }: ContactCardProps) {
         </span>
         {title === "Email" ? (
           <a
-            href="mailto:VRdental.yanam@gmail.com"
+            href="mailto:contact@32smilesdentalclinic.com"
             className="text-sm font-semibold text-dark-text mt-1 hover:text-primary transition-colors"
           >
             {details}
           </a>
         ) : title === "Reception & Booking" ? (
           <a
-            href="tel:09885349798"
+            href="tel:+919876543210"
             className="text-sm font-semibold text-dark-text mt-1 hover:text-primary transition-colors"
           >
             {details}
@@ -281,8 +281,8 @@ export default function ContactSection() {
                         
                         <div className="flex items-center justify-center gap-2 text-sm text-gray-text font-medium">
                           <span>Or call directly:</span>
-                          <a href="tel:09885349798" className="text-primary font-bold hover:underline">
-                            Call 098853 49798
+                          <a href="tel:+919876543210" className="text-primary font-bold hover:underline">
+                            Call +91 98765 43210
                           </a>
                         </div>
                       </div>
@@ -305,7 +305,7 @@ export default function ContactSection() {
                     </h3>
                     
                     <p className="text-base text-gray-text max-w-md leading-relaxed font-normal mb-8">
-                      Thank you for choosing V.R. Dental Care & Dental Implant Centre. Our clinical team has received your request and will call you back at your provided phone number to confirm your slot.
+                      Thank you for choosing 32 Smiles Multispeciality Dental Clinic. Our clinical team has received your request and will call you back at your provided phone number to confirm your slot.
                     </p>
                     
                     <div className="p-4 rounded-2xl bg-slate-50 border border-borders/60 flex items-center gap-3 text-left w-full max-w-sm mb-8">
@@ -343,7 +343,7 @@ export default function ContactSection() {
             className="lg:col-span-8 w-full rounded-[24px] overflow-hidden shadow-[0_15px_50px_rgba(15,23,42,0.05)] border border-borders relative h-[450px]"
           >
             <iframe
-              title="V.R. Dental Care & Dental Implant Centre Map Location"
+              title="32 Smiles Multispeciality Dental Clinic Map Location"
               src="https://www.google.com/maps/embed?pb=!1m18!1m12!1m3!1d3826.969176378418!2d82.21557007579178!3d16.728224521453205!2m3!1f0!2f0!3f0!3m2!1i1024!2i768!4f13.1!3m3!1m2!1s0x3a381fed6dbf3fbf%3A0xe54e60e86b404d03!2sGMC%20Balayogi%20Stadium!5e0!3m2!1sen!2sin!4v1700000000000!5m2!1sen!2sin"
               className="absolute inset-0 w-full h-full border-none"
               loading="lazy"
@@ -356,17 +356,17 @@ export default function ContactSection() {
             <ContactCard
               icon={MapPin}
               title="Clinic Address"
-              details="3rd Cross St, opposite GMC Balayogi Stadium, Zicria Nagar, Zicriya Nagar, Yanam, Andhra Pradesh 533464"
+              details="32 Smiles Dental Clinic, Main Road"
             />
             <ContactCard
               icon={Phone}
               title="Reception & Booking"
-              details="098853 49798"
+              details="+91 98765 43210"
             />
             <ContactCard
               icon={Mail}
               title="Email"
-              details="VRdental.yanam@gmail.com"
+              details="contact@32smilesdentalclinic.com"
             />
             <ContactCard
               icon={Clock}

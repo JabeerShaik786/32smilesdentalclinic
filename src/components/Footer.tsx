@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { Mail, MapPin, Phone, MessageSquare, Clock } from "lucide-react";
+import { Mail, MapPin, Phone, MessageSquare, Clock, Calendar, LogIn } from "lucide-react";
 import { getAssetPath } from "@/lib/getAssetPath";
 
 export default function Footer() {
@@ -34,147 +34,180 @@ export default function Footer() {
   };
 
   return (
-    <footer className="w-full bg-[#0F172A] text-white/90 pt-20 pb-10 border-t border-white/5 relative overflow-hidden">
-      {/* Background radial glow */}
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] rounded-full bg-primary/10 blur-[150px] -z-10 pointer-events-none" />
-      <div className="absolute bottom-0 left-0 w-[400px] h-[400px] rounded-full bg-secondary/5 blur-[120px] -z-10 pointer-events-none" />
+    <footer className="w-full bg-[#013A8F] text-white/90 pt-16 lg:pt-20 pb-10 border-t border-white/10 relative overflow-hidden">
+      {/* Top Subtle Blue Stripe with Primary Gradient */}
+      <div className="w-full h-1.5 bg-[linear-gradient(110deg,#013A8F,#0153AD,#01B0FD)] absolute top-0 left-0" />
 
-      <div className="max-w-[1440px] mx-auto px-6 md:px-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-16">
-        {/* Brand Column */}
-        <div className="flex flex-col gap-6">
+      {/* Background radial glow */}
+      <div className="absolute top-0 right-0 w-[500px] h-[500px] rounded-full bg-[#01B0FD]/10 blur-[150px] -z-10 pointer-events-none" />
+      <div className="absolute bottom-0 left-0 w-[400px] h-[400px] rounded-full bg-[#0153AD]/20 blur-[120px] -z-10 pointer-events-none" />
+
+      {/* Upper Footer Section: 4 columns on desktop, 2-col tablet, 1-col mobile */}
+      <div className="max-w-[1440px] mx-auto px-6 md:px-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-10 lg:gap-12 mb-16">
+        
+        {/* Column 1 — Clinic branding */}
+        <div className="flex flex-col gap-6 text-left">
           <a
             href="#home"
             onClick={(e) => handleLinkClick(e, "#home")}
-            className="flex items-center gap-3 group cursor-pointer"
+            className="flex items-center gap-3.5 group cursor-pointer"
           >
-            <div className="relative w-10 h-10 shrink-0">
+            <div className="relative w-[52px] h-[46px] rounded-xl overflow-hidden border border-white/20 shadow-xs shrink-0">
               <Image
-                src={getAssetPath("/logo.png")}
-                alt="V.R. Dental Care"
+                src={getAssetPath("/32smiles-logo.jpg")}
+                alt="32 Smiles Multispeciality Dental Clinic"
                 fill
-                className="object-contain"
+                className="object-cover"
                 unoptimized
               />
             </div>
-            <div className="flex flex-col">
-              <span className="font-heading font-extrabold text-sm tracking-tight text-white leading-tight uppercase">
-                V.R. Dental Care
+            <div className="flex flex-col text-left">
+              <span className="font-heading font-extrabold text-lg text-white leading-tight">
+                32 <span className="text-[#01B0FD]">Smiles</span>
               </span>
-              <span className="font-sans font-medium text-[8px] tracking-[0.05em] text-accent uppercase leading-none mt-0.5">
-                & Dental Implant Centre
+              <span className="text-[10px] font-bold text-[#47D2FD] tracking-wider uppercase mt-0.5">
+                Multispeciality Dental Clinic
               </span>
             </div>
           </a>
-          <p className="text-white/60 text-sm leading-relaxed max-w-sm text-left">
-            Transforming Smiles, Transforming Lives. Professional and personalized dental care in a modern and comfortable environment.
+
+          <p className="text-white/70 text-sm leading-relaxed max-w-sm">
+            Transforming Smiles, Enhancing Confidence. Providing premier multispeciality dental care, advanced dental implants, and comfortable cosmetic treatments in Yanam.
           </p>
-          <div className="flex items-center gap-3">
-            <span className="text-[12px] bg-primary/20 text-accent px-3.5 py-1 rounded-full font-semibold border border-primary/10 flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5" />
-              Hours: Monday – Saturday: 9:00 AM – 8:00 PM (Sunday: Closed)
+
+          <div className="flex flex-col gap-2">
+            <span className="text-[12px] bg-[#0153AD]/40 text-white px-3.5 py-1.5 rounded-full font-medium border border-[#47D2FD]/30 flex items-center gap-1.5 w-fit">
+              <Clock className="w-3.5 h-3.5 text-[#47D2FD]" />
+              Mon – Sat: 9:30 AM – 8:30 PM
+            </span>
+            <span className="text-[11px] text-rose-300 font-medium pl-3">
+              * Sunday: Closed
             </span>
           </div>
         </div>
 
-        {/* Quick Links Column */}
+        {/* Column 2 — Navigation */}
         <div className="flex flex-col gap-5 text-left">
-          <h4 className="font-heading font-bold text-base text-white tracking-wide uppercase">
+          <h4 className="font-heading font-bold text-base text-white tracking-wide uppercase flex items-center gap-2">
             Navigation
+            <span className="w-1.5 h-1.5 rounded-full bg-[#01B0FD]" />
           </h4>
-          <ul className="flex flex-col gap-3.5 text-sm text-white/60">
+          <ul className="flex flex-col gap-3.5 text-sm text-white/70">
             {[
               { name: "Home", href: "#home" },
-              { name: "Services", href: "#services" },
-              { name: "About", href: "#about" },
-              { name: "Blog", href: "#blog" },
-              { name: "Contact", href: "#contact" },
-              { name: "Book Appointment", href: "#appointment" },
+              { name: "About Us", href: "#about" },
+              { name: "Our Services", href: "#services" },
+              { name: "Gallery", href: "#gallery" },
+              { name: "Testimonials", href: "#testimonials" },
+              { name: "Contact Us", href: "#contact" },
             ].map((link) => (
               <li key={link.name}>
                 <a
                   href={link.href}
                   onClick={(e) => handleLinkClick(e, link.href)}
-                  className="hover:text-accent transition-colors duration-200"
+                  className="hover:text-[#47D2FD] transition-colors duration-200"
                 >
                   {link.name}
                 </a>
               </li>
             ))}
-          </ul>
-        </div>
-
-        {/* Services Column */}
-        <div className="flex flex-col gap-5 text-left">
-          <h4 className="font-heading font-bold text-base text-white tracking-wide uppercase">
-            Services
-          </h4>
-          <ul className="flex flex-col gap-3.5 text-sm text-white/60">
-            {[
-              { name: "Root Canal Treatment", href: "#services" },
-              { name: "Cavity Inspection", href: "#services" },
-              { name: "Dental Implants", href: "#services" },
-              { name: "Orthodontics", href: "#services" },
-              { name: "Teeth Alignment", href: "#services" },
-              { name: "Cosmetic Dentistry", href: "#services" },
-            ].map((link) => (
-              <li key={link.name}>
-                <a
-                  href={link.href}
-                  onClick={(e) => handleLinkClick(e, link.href)}
-                  className="hover:text-accent transition-colors duration-200"
-                >
-                  {link.name}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        {/* Contact Column */}
-        <div className="flex flex-col gap-5 text-left">
-          <h4 className="font-heading font-bold text-base text-white tracking-wide uppercase">
-            Contact Us
-          </h4>
-          <div className="flex flex-col gap-4 text-sm text-white/60">
-            <div className="flex gap-3">
-              <MapPin className="w-5 h-5 text-accent shrink-0 mt-0.5" />
-              <span>P6M6+2M Yanam, Puducherry</span>
-            </div>
-            <div className="flex gap-3">
-              <Phone className="w-5 h-5 text-accent shrink-0 mt-0.5" />
-              <a href="tel:09885349798" className="hover:text-white transition-colors">
-                098853 49798
-              </a>
-            </div>
-            <div className="flex gap-3">
-              <Mail className="w-5 h-5 text-accent shrink-0 mt-0.5" />
+            <li>
               <a
-                href="mailto:VRdental.yanam@gmail.com"
-                className="hover:text-white transition-colors"
-              >
-                VRdental.yanam@gmail.com
-              </a>
-            </div>
-            <div className="flex gap-3">
-              <MessageSquare className="w-5 h-5 text-green-400 shrink-0 mt-0.5" />
-              <a
-                href="https://wa.me/919885349798"
+                href="https://calendly.com/32smiles-dental-clinic/30min?month=2026-10&date=2026-10-03"
                 target="_blank"
                 rel="noopener noreferrer"
-                className="hover:text-white transition-colors"
+                className="text-[#47D2FD] hover:text-white font-semibold flex items-center gap-1.5 transition-colors"
               >
-                Chat on WhatsApp
+                <Calendar className="w-3.5 h-3.5" />
+                <span>Book Appointment (Calendly)</span>
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        {/* Column 3 — Services */}
+        <div className="flex flex-col gap-5 text-left">
+          <h4 className="font-heading font-bold text-base text-white tracking-wide uppercase flex items-center gap-2">
+            Services
+            <span className="w-1.5 h-1.5 rounded-full bg-[#01B0FD]" />
+          </h4>
+          <ul className="flex flex-col gap-3.5 text-sm text-white/70">
+            {[
+              { name: "Dental Implants", href: "#services" },
+              { name: "Root Canal Treatment", href: "#services" },
+              { name: "Braces & Clear Aligners", href: "#services" },
+              { name: "Teeth Whitening", href: "#services" },
+              { name: "Crowns & Bridges", href: "#services" },
+              { name: "Wisdom Teeth Surgery", href: "#services" },
+              { name: "Pediatric Dentistry", href: "#services" },
+            ].map((link) => (
+              <li key={link.name}>
+                <a
+                  href={link.href}
+                  onClick={(e) => handleLinkClick(e, link.href)}
+                  className="hover:text-[#47D2FD] transition-colors duration-200"
+                >
+                  {link.name}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        {/* Column 4 — Contact Us */}
+        <div className="flex flex-col gap-5 text-left">
+          <h4 className="font-heading font-bold text-base text-white tracking-wide uppercase flex items-center gap-2">
+            Contact Us
+            <span className="w-1.5 h-1.5 rounded-full bg-[#01B0FD]" />
+          </h4>
+          <div className="flex flex-col gap-4 text-sm text-white/70">
+            <div className="flex gap-3">
+              <MapPin className="w-5 h-5 text-[#47D2FD] shrink-0 mt-0.5" />
+              <div className="flex flex-col text-left">
+                <span className="leading-relaxed text-white/90">
+                  D.No. 4-5-087, Pillaraya Street, Opp. Pillaraya Temple, Ambedkar Nagar, Yanam, Andhra Pradesh – 533464
+                </span>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <Phone className="w-5 h-5 text-[#47D2FD] shrink-0 mt-0.5" />
+              <a href="tel:08143148485" className="hover:text-[#47D2FD] text-white/95 font-medium transition-colors">
+                081431 48485
+              </a>
+            </div>
+            <div className="flex gap-3">
+              <MessageSquare className="w-5 h-5 text-[#25D366] shrink-0 mt-0.5" />
+              <a
+                href="https://wa.me/918143148485"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-[#25D366] text-white/95 font-medium transition-colors"
+              >
+                WhatsApp: 081431 48485
+              </a>
+            </div>
+            <div className="flex gap-3">
+              <Calendar className="w-5 h-5 text-[#47D2FD] shrink-0 mt-0.5" />
+              <a
+                href="https://calendly.com/32smiles-dental-clinic/30min?month=2026-10&date=2026-10-03"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-white text-[#47D2FD] font-bold transition-colors"
+              >
+                Schedule on Calendly →
               </a>
             </div>
           </div>
         </div>
+
       </div>
 
+      {/* Lower Footer Section */}
       <hr className="border-white/10 max-w-[1440px] mx-auto px-6 md:px-12" />
 
-      <div className="max-w-[1440px] mx-auto px-6 md:px-12 mt-8 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-white/40 text-center md:text-left pb-24 md:pb-8">
-        <p>© {currentYear} V.R. Dental Care & Dental Implant Centre. All rights reserved.</p>
-        <p className="text-white/40 flex items-center justify-center gap-1.5">
+      <div className="max-w-[1440px] mx-auto px-6 md:px-12 mt-8 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-white/50 text-center md:text-left">
+        <p>© 2026 32 Smiles Multispeciality Dental Clinic. All rights reserved.</p>
+        <p className="text-white/50 flex items-center justify-center gap-1.5">
           <Image
             src={getAssetPath("/jk-logo.png")}
             alt="JK & Co."
@@ -185,20 +218,14 @@ export default function Footer() {
           />
           <span>Designed and Managed by JK & Co.</span>
         </p>
-        <div className="grid grid-cols-2 md:flex md:flex-wrap items-center justify-center md:justify-end gap-x-6 gap-y-3.5 text-center md:text-left max-w-xs md:max-w-none mx-auto md:mx-0 md:pr-24 lg:pr-28">
-          <Link href="/privacy-policy" className="hover:text-white transition-colors duration-200 py-1">
+        <div className="flex items-center justify-center gap-6">
+          <Link href="/privacy-policy" className="hover:text-[#47D2FD] transition-colors duration-200">
             Privacy Policy
           </Link>
-          <Link href="/terms-of-service" className="hover:text-white transition-colors duration-200 py-1">
+          <Link href="/terms-of-service" className="hover:text-[#47D2FD] transition-colors duration-200">
             Terms of Service
           </Link>
-          <a href="#" className="hover:text-white transition-colors duration-200 py-1">
-            Sitemap
-          </a>
-          <Link
-            href="/login"
-            className="hover:text-white transition-colors duration-200 opacity-70 hover:opacity-100 py-1"
-          >
+          <Link href="/login" className="hover:text-[#47D2FD] transition-colors duration-200">
             Login
           </Link>
         </div>

@@ -15,16 +15,29 @@ const poppins = Poppins({
   weight: ["600", "700"],
 });
 
-const isProd = process.env.NODE_ENV === "production";
-const defaultBasePath = isProd ? "/32smilesdentalclinic" : "";
+const defaultBasePath = "";
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH !== undefined
   ? process.env.NEXT_PUBLIC_BASE_PATH
   : defaultBasePath;
 
 export const metadata: Metadata = {
-  title: "32 Smiles Dental Clinic - Dental Practice Management Software",
-  description: "The modern, all-in-one practice management platform for dental clinics. HIPAA compliant, responsive scheduling, billing, and patient charts.",
+  title: "32 Smiles Multispeciality Dental Clinic | Advanced Dental Care & Implant Centre",
+  description: "32 Smiles Multispeciality Dental Clinic provides expert comprehensive dental treatments including Dental Implants, Root Canal Treatment, Orthodontics, Teeth Whitening, Cosmetic Dentistry, and Laser Dental Care.",
+  keywords: [
+    "32 Smiles",
+    "32 Smiles Multispeciality Dental Clinic",
+    "Multispeciality Dental Clinic",
+    "Dental Clinic",
+    "Dentist",
+    "Dental Implants",
+    "Root Canal Treatment",
+    "Teeth Alignment",
+    "Orthodontics",
+    "Cosmetic Dentistry",
+    "Teeth Whitening",
+    "Laser Dentistry",
+  ],
   icons: {
     icon: [
       { url: `${basePath}/favicon.ico`, sizes: "any" },

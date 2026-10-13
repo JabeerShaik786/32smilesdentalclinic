@@ -5,7 +5,7 @@ const allowedOrigins = [
   "http://localhost:3000",
   "http://127.0.0.1:3000",
   "https://jabeershaik786.github.io",
-  "https://skkarishma363.github.io",
+  "https://32smilesdentalclinic.com",
 ];
 
 serve(async (req: Request) => {
@@ -172,9 +172,9 @@ serve(async (req: Request) => {
       );
     }
 
-    // 7. Sameeksha GitHub Action Workflow Parameters
-    const githubOwner = "skkarishma363";
-    const githubRepo = "Sameeksha_Dental_Software";
+    // 7. 32 Smiles GitHub Action Workflow Parameters
+    const githubOwner = "JabeerShaik786";
+    const githubRepo = "32-Smiles-Multispeciality-Dental-Clinic";
     const workflowFilename = "dentpro-backup.yml";
     const githubRef = "main";
 

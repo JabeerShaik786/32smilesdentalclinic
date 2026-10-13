@@ -6,8 +6,8 @@ import FloatingButtons from "@/components/FloatingButtons";
 import { ShieldCheck, ArrowLeft, Lock, FileText, Phone, Mail, MapPin } from "lucide-react";
 
 export const metadata: Metadata = {
-  title: "Privacy Policy | V.R. Dental Care & Dental Implant Centre",
-  description: "Privacy Policy and patient data protection practices for V.R. Dental Care & Dental Implant Centre in Yanam.",
+  title: "Privacy Policy | 32 Smiles Multispeciality Dental Clinic",
+  description: "Privacy Policy and patient information protection practices for 32 Smiles Multispeciality Dental Clinic.",
 };
 
 export default function PrivacyPolicyPage() {
@@ -16,7 +16,7 @@ export default function PrivacyPolicyPage() {
       <Navbar />
       <main className="flex-grow pt-28 pb-20 bg-[#f8fafc]">
         {/* Header Banner */}
-        <section className="bg-gradient-to-r from-[#0284c7] via-[#0ea5e9] to-[#38bdf8] text-white py-14 px-6 md:px-12 lg:px-20 relative overflow-hidden">
+        <section className="bg-[linear-gradient(110deg,#013A8F,#0153AD,#01B0FD)] text-white py-14 px-6 md:px-12 lg:px-20 relative overflow-hidden">
           <div className="max-w-[1100px] mx-auto relative z-10">
             <Link
               href="/"
@@ -37,10 +37,7 @@ export default function PrivacyPolicyPage() {
               Privacy Policy
             </h1>
             <p className="mt-3 text-white/90 text-sm sm:text-base max-w-2xl font-normal">
-              How V.R. Dental Care & Dental Implant Centre collects, uses, and safeguards your health and personal information.
-            </p>
-            <p className="mt-2 text-xs text-white/70">
-              Last Updated: September 2026 | Effective Date: September 2026
+              How 32 Smiles Multispeciality Dental Clinic collects, uses, and safeguards your health and personal information.
             </p>
           </div>
         </section>
@@ -51,141 +48,63 @@ export default function PrivacyPolicyPage() {
             
             {/* Introduction */}
             <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-[#0f2942] mb-4 flex items-center gap-2.5">
-                <span className="w-2 h-6 bg-[#0284c7] rounded-full inline-block" />
+              <h2 className="text-xl sm:text-2xl font-bold text-[#013A8F] mb-4 flex items-center gap-2.5">
+                <span className="w-2 h-6 bg-[#0153AD] rounded-full inline-block" />
                 1. Introduction
               </h2>
               <p className="text-slate-600 leading-relaxed text-sm sm:text-base">
-                Welcome to <strong>V.R. Dental Care & Dental Implant Centre</strong> (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;). We are committed to maintaining the confidentiality, integrity, and security of your personal and dental medical information. This Privacy Policy describes how we collect, store, process, and protect information obtained through our clinic visits, website, online consultancy requests, and communication channels.
+                Welcome to <strong>32 Smiles Multispeciality Dental Clinic</strong> (&quot;we,&quot; &quot;our,&quot; or &quot;us&quot;). We are committed to maintaining the confidentiality, integrity, and security of your personal and dental medical information. This Privacy Policy describes how we collect, store, process, and protect information obtained through our clinic visits, website, online consultation requests, and communication channels.
               </p>
             </div>
 
             {/* Information We Collect */}
             <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-[#0f2942] mb-4 flex items-center gap-2.5">
-                <span className="w-2 h-6 bg-[#0284c7] rounded-full inline-block" />
+              <h2 className="text-xl sm:text-2xl font-bold text-[#013A8F] mb-4 flex items-center gap-2.5">
+                <span className="w-2 h-6 bg-[#0153AD] rounded-full inline-block" />
                 2. Information We Collect
               </h2>
-              <p className="text-slate-600 leading-relaxed text-sm sm:text-base mb-4">
-                To provide safe, accurate, and personalized dental treatments, we may collect the following types of information:
-              </p>
-              <ul className="list-disc list-inside space-y-2.5 text-slate-600 text-sm sm:text-base pl-2">
-                <li>
-                  <strong className="text-slate-800">Personal Identification:</strong> Full name, age, gender, contact phone number, email address, and residential address.
-                </li>
-                <li>
-                  <strong className="text-slate-800">Dental & Medical Records:</strong> Dental history, past surgeries, X-rays, 3D intraoral scans, medical conditions (e.g., hypertension, diabetes, allergies), current medications, and physician notes.
-                </li>
-                <li>
-                  <strong className="text-slate-800">Appointment & Inquiry Details:</strong> Requested consultation times, treatment preferences, feedback, and notes provided via our Quick Online Consultancy form or direct phone/WhatsApp communication.
-                </li>
-                <li>
-                  <strong className="text-slate-800">Billing & Payment Information:</strong> Payment records and receipts required for clinical accounting (we do not store credit card or banking credentials on our web servers).
-                </li>
-              </ul>
-            </div>
-
-            {/* How We Use Your Information */}
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-[#0f2942] mb-4 flex items-center gap-2.5">
-                <span className="w-2 h-6 bg-[#0284c7] rounded-full inline-block" />
-                3. How We Use Your Information
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 my-4">
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/60">
-                  <h3 className="font-semibold text-sm text-[#0f2942] mb-1.5 flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-[#0284c7]" /> Clinical Care
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-                    Formulating accurate treatment plans, performing surgical procedures, tracking healing progress, and scheduling recalls.
-                  </p>
-                </div>
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/60">
-                  <h3 className="font-semibold text-sm text-[#0f2942] mb-1.5 flex items-center gap-2">
-                    <Phone className="w-4 h-4 text-[#0284c7]" /> Patient Communication
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-                    Sending appointment confirmations, pre-procedure instructions, post-treatment care advice, and responses to your inquiries.
-                  </p>
-                </div>
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/60">
-                  <h3 className="font-semibold text-sm text-[#0f2942] mb-1.5 flex items-center gap-2">
-                    <Lock className="w-4 h-4 text-[#0284c7]" /> Emergency Response
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-                    Contacting patients or designated emergency contacts in acute dental or medical situations during clinical treatment.
-                  </p>
-                </div>
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/60">
-                  <h3 className="font-semibold text-sm text-[#0f2942] mb-1.5 flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-[#0284c7]" /> Statutory Compliance
-                  </h3>
-                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
-                    Complying with the Dental Council of India (DCI), state health authorities, and Indian medical record retention requirements.
-                  </p>
-                </div>
+              <div className="space-y-4 text-slate-600 text-sm sm:text-base leading-relaxed">
+                <p>
+                  <strong>Personal Contact Details:</strong> Name, phone number, email address, and residential address provided during online appointment bookings, phone calls, or clinic registration.
+                </p>
+                <p>
+                  <strong>Dental and Medical Records:</strong> Treatment histories, digital X-rays, clinical photographs, diagnostic records, allergies, and medication notes necessary to ensure safe and effective dental procedures.
+                </p>
+                <p>
+                  <strong>Website Usage Data:</strong> Anonymized technical details such as browser type, device information, and interaction patterns to help optimize our online services.
+                </p>
               </div>
             </div>
 
-            {/* Confidentiality & Security */}
+            {/* Use of Information */}
             <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-[#0f2942] mb-4 flex items-center gap-2.5">
-                <span className="w-2 h-6 bg-[#0284c7] rounded-full inline-block" />
-                4. Confidentiality & Data Security
+              <h2 className="text-xl sm:text-2xl font-bold text-[#013A8F] mb-4 flex items-center gap-2.5">
+                <span className="w-2 h-6 bg-[#0153AD] rounded-full inline-block" />
+                3. How We Use Your Information
               </h2>
-              <p className="text-slate-600 leading-relaxed text-sm sm:text-base">
-                We implement industry-standard physical, technical, and administrative security measures to prevent unauthorized access, disclosure, or misuse of your clinical records. Only authorized medical and administrative personnel directly involved in your care have access to your personal files.
-              </p>
-            </div>
-
-            {/* Sharing of Information */}
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-[#0f2942] mb-4 flex items-center gap-2.5">
-                <span className="w-2 h-6 bg-[#0284c7] rounded-full inline-block" />
-                5. Information Sharing
-              </h2>
-              <p className="text-slate-600 leading-relaxed text-sm sm:text-base">
-                We <strong className="text-slate-800">never sell, rent, or trade</strong> your personal or health data to commercial third parties. Information is disclosed strictly under the following circumstances:
-              </p>
-              <ul className="list-disc list-inside space-y-2 text-slate-600 text-sm sm:text-base pl-2 mt-3">
-                <li>With external dental laboratories and 3D imaging specialists strictly for custom prosthesis, aligners, and crowns fabrication.</li>
-                <li>With specialist dental surgeons or medical doctors for multi-disciplinary consultations, with your consent.</li>
-                <li>When required by law, court order, or governmental healthcare authority.</li>
+              <ul className="list-disc pl-5 space-y-2 text-slate-600 text-sm sm:text-base">
+                <li>Scheduling, confirming, and managing dental appointments and consultations.</li>
+                <li>Providing clinical diagnosis, customized treatment planning, and follow-up care.</li>
+                <li>Responding to inquiries submitted via website forms, telephone, or WhatsApp.</li>
+                <li>Maintaining accurate patient healthcare records in compliance with clinical standards.</li>
               </ul>
             </div>
 
-            {/* Patient Rights */}
-            <div>
-              <h2 className="text-xl sm:text-2xl font-bold text-[#0f2942] mb-4 flex items-center gap-2.5">
-                <span className="w-2 h-6 bg-[#0284c7] rounded-full inline-block" />
-                6. Your Rights
-              </h2>
-              <p className="text-slate-600 leading-relaxed text-sm sm:text-base">
-                As a patient, you have the right to request a copy of your clinical treatment records and X-rays, update inaccurate contact details, and inquire about how your data is being handled. You may contact our clinic administration at any time to exercise these rights.
+            {/* Contact Details */}
+            <div className="pt-6 border-t border-slate-100">
+              <h3 className="text-lg font-bold text-[#013A8F] mb-3">Questions & Contact</h3>
+              <p className="text-slate-600 text-sm leading-relaxed mb-4">
+                If you have any questions or concerns regarding this Privacy Policy, please contact us:
               </p>
-            </div>
-
-            {/* Contact Information */}
-            <div className="p-6 bg-slate-50 rounded-xl border border-slate-200">
-              <h3 className="font-bold text-base text-[#0f2942] mb-3">
-                Questions or Concerns Regarding Privacy?
-              </h3>
-              <p className="text-sm text-slate-600 mb-4">
-                If you have questions about this Privacy Policy or wish to update your records, please reach out to us:
-              </p>
-              <div className="space-y-2 text-sm text-slate-700">
-                <p className="flex items-center gap-2">
-                  <MapPin className="w-4 h-4 text-[#0284c7] shrink-0" />
-                  <span>3rd Cross St, opposite GMC Balayogi Stadium, Zicria Nagar, Yanam, Andhra Pradesh 533464</span>
-                </p>
-                <p className="flex items-center gap-2">
-                  <Phone className="w-4 h-4 text-[#0284c7] shrink-0" />
-                  <span>098853 49798 / 087903 49798</span>
-                </p>
-                <p className="flex items-center gap-2">
-                  <Mail className="w-4 h-4 text-[#0284c7] shrink-0" />
-                  <span>VRdental.yanam@gmail.com</span>
-                </p>
+              <div className="flex flex-col sm:flex-row gap-4 text-sm text-slate-700">
+                <div className="flex items-center gap-2">
+                  <Phone className="w-4 h-4 text-[#0153AD]" />
+                  <a href="tel:08143148485" className="hover:underline">081431 48485</a>
+                </div>
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-[#0153AD]" />
+                  <span>Ambedkar Nagar, Yanam, Andhra Pradesh – 533464</span>
+                </div>
               </div>
             </div>
 

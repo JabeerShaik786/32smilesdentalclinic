@@ -7,7 +7,7 @@ export async function proxy(request: NextRequest) {
   })
 
   const urlEnv = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'
-  const keyEnv = process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'placeholder'
+  const keyEnv = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'placeholder'
 
   const supabase = createServerClient(
     urlEnv,

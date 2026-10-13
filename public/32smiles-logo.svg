@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 380 90" width="380" height="90" fill="none">
+  <defs>
+    <linearGradient id="blueGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0AA8DE" />
+      <stop offset="100%" stop-color="#0284C7" />
+    </linearGradient>
+    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38BDF8" />
+      <stop offset="100%" stop-color="#0AA8DE" />
+    </linearGradient>
+    <filter id="softGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-color="#0AA8DE" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- Logo Mark / Emblem -->
+  <g transform="translate(10, 8)" filter="url(#softGlow)">
+    <!-- Outer Shield / Circle Container -->
+    <rect x="0" y="0" width="74" height="74" rx="20" fill="url(#blueGrad)" />
+    
+    <!-- Stylized Tooth & Smile Art -->
+    <path d="M37 14 C27 14 20 21 21 31 C21.5 36 23 43 26 53 C27.5 58 31 59 34 52 C35.5 48.5 36.5 45 37 45 C37.5 45 38.5 48.5 40 52 C43 59 46.5 58 48 53 C51 43 52.5 36 53 31 C54 21 47 14 37 14 Z" 
+          fill="#FFFFFF" />
+    
+    <!-- Stylized "32" Subtle Badge inside tooth -->
+    <text x="37" y="36" font-family="system-ui, -apple-system, sans-serif" font-weight="900" font-size="14" fill="#0284C7" text-anchor="middle">32</text>
+    
+    <!-- Golden / Cyan Sparkle Star -->
+    <path d="M54 18 L55.5 22 L59.5 23.5 L55.5 25 L54 29 L52.5 25 L48.5 23.5 L52.5 22 Z" fill="#F8FAFC" opacity="0.95" />
+    <!-- Dynamic Smile Arc under tooth -->
+    <path d="M22 62 Q 37 72 52 62" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" fill="none" />
+  </g>
+
+  <!-- Typography: Clinic Name -->
+  <g transform="translate(98, 18)">
+    <!-- 32 SMILES -->
+    <text x="0" y="32" font-family="'Manrope', system-ui, -apple-system, sans-serif" font-weight="800" font-size="31" fill="#0F172A" letter-spacing="-0.5">
+      32 <tspan fill="#0AA8DE">SMILES</tspan>
+    </text>
+
+    <!-- MULTISPECIALITY DENTAL CLINIC -->
+    <text x="1" y="50" font-family="'Inter', system-ui, -apple-system, sans-serif" font-weight="700" font-size="9.5" fill="#0284C7" letter-spacing="2.8">
+      MULTISPECIALITY DENTAL CLINIC
+    </text>
+    
+    <!-- Subtle Tagline line -->
+    <rect x="1" y="57" width="48" height="2.5" rx="1.25" fill="#0AA8DE" />
+  </g>
+</svg>

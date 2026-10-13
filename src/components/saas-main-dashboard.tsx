@@ -8158,7 +8158,7 @@ ${clinicName}`;
                         <div>
                           <h1 className="text-xl font-bold text-slate-900 tracking-tight">{clinicName || "32 Smiles Dental Clinic"}</h1>
                           <p className="text-xs font-semibold text-slate-600">Dental Clinic / Comprehensive Dental Care</p>
-                          <p className="text-[11px] text-slate-500 font-medium">Phone: +91 98853 49798</p>
+                          <p className="text-[11px] text-slate-500 font-medium">Phone: +91 98765 43210</p>
                         </div>
                       </div>
                       <div className="text-right space-y-0.5">
@@ -9955,7 +9955,7 @@ ${clinicName}`;
                       <div className="space-y-1">
                         <h1 className="text-xl font-bold text-blue-900 tracking-tight">{clinicName || "32 Smiles Dental Clinic"}</h1>
                         <p className="text-xs text-slate-600 font-medium">32 Smiles Dental Clinic, Main Road</p>
-                        <p className="text-xs text-slate-800 font-bold">PH: 09885349798</p>
+                        <p className="text-xs text-slate-800 font-bold">PH: +91 98765 43210</p>
                       </div>
                       <div className="text-right space-y-1">
                         <span className="text-lg font-black text-blue-900 uppercase tracking-wider block">PRESCRIPTION</span>
@@ -9968,7 +9968,7 @@ ${clinicName}`;
                       const pItem = patients.find(p => p.id === selectedPatientId);
                       if (!pItem) return null;
                       const ageGender = `${pItem.age || ""} ${pItem.gender || ""}`.trim();
-                      const docName = prescDoctor || (doctors[0]?.name || "Dr. Durga Praveen");
+                      const docName = prescDoctor || (doctors[0]?.name || "Doctor / Dentist");
                       const medNotes = pItem.medicalNotes || (pItem as any).medicalConditions || "None";
 
                       return (
@@ -10075,7 +10075,7 @@ ${clinicName}`;
                     <div className="pt-8 flex justify-end print:break-inside-avoid">
                       <div className="text-right space-y-6">
                         <p className="text-xs font-bold text-slate-900">
-                          Doctor: {prescDoctor || (doctors[0]?.name || "Dr. Durga Praveen")}
+                          Doctor: {prescDoctor || (doctors[0]?.name || "Doctor / Dentist")}
                         </p>
                         <p className="text-xs text-slate-700">
                           Signature: __________________________
@@ -14839,13 +14839,13 @@ ${clinicName}`;
               {/* Clinic details header (Centered) */}
               <div className="text-center space-y-1 pb-2">
                 <h1 className="text-xl font-extrabold text-blue-900 tracking-tight">
-                  VR Dental Care Dental Implant Centre
+                  32 Smiles Multispeciality Dental Clinic
                 </h1>
                 <p className="text-[11px] text-slate-700 font-medium max-w-md mx-auto leading-tight">
-                  3rd Cross St, opp. GMC Balayogi stadium, Zicria Nagar, Yanam, Andhra Pradesh 533464
+                  32 Smiles Dental Clinic, Main Road
                 </p>
                 <p className="text-[11px] font-bold text-slate-800">
-                  PH: 09885349798
+                  PH: +91 98765 43210
                 </p>
               </div>
               <hr className="border-slate-400 my-2" />
@@ -15009,7 +15009,7 @@ ${clinicName}`;
 
                 <div className="text-left sm:text-right print:text-right space-y-1 text-slate-900 shrink-0 self-end sm:self-auto">
                   <div className="font-bold">Authorised Signatory</div>
-                  <div className="text-[11px] font-semibold text-slate-800">VR Dental Care Dental Implant Centre</div>
+                  <div className="text-[11px] font-semibold text-slate-800">32 Smiles Multispeciality Dental Clinic</div>
                   <div className="text-[10px] font-bold tracking-wider uppercase text-slate-900">PROSTHODONTIST</div>
                 </div>
               </div>

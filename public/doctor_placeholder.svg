@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 460 520" width="460" height="520" fill="none">
+  <defs>
+    <linearGradient id="docBg" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#E0F2FE" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#BAE6FD" stop-opacity="0.8"/>
+    </linearGradient>
+    <linearGradient id="coatGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#F1F5F9"/>
+      <stop offset="50%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#E2E8F0"/>
+    </linearGradient>
+    <linearGradient id="scrubGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Doctor Silhouette Silhouette Backdrop -->
+  <g transform="translate(0, 30)">
+    <!-- Head / Face Silhouette -->
+    <ellipse cx="230" cy="120" rx="60" ry="70" fill="#CBD5E1" />
+    
+    <!-- Hairline silhouette -->
+    <path d="M170 115 C170 70 200 50 230 50 C260 50 290 70 290 115 C285 90 270 70 230 70 C190 70 175 90 170 115 Z" fill="#94A3B8" />
+
+    <!-- Neck -->
+    <rect x="205" y="180" width="50" height="45" fill="#CBD5E1" rx="6" />
+
+    <!-- Inner Scrub (Teal/Blue) -->
+    <path d="M185 220 L275 220 L255 290 L205 290 Z" fill="url(#scrubGrad)" />
+    <!-- V-neck collar -->
+    <path d="M210 220 L230 255 L250 220" stroke="#38BDF8" stroke-width="4" stroke-linecap="round" fill="none" />
+
+    <!-- Stethoscope -->
+    <path d="M195 220 C190 280 205 320 220 330 C225 334 235 334 240 330 C255 320 270 280 265 220" stroke="#0F172A" stroke-width="4.5" stroke-linecap="round" fill="none" />
+    <circle cx="230" cy="342" r="10" fill="#64748B" stroke="#0F172A" stroke-width="3" />
+
+    <!-- White Medical Doctor Coat -->
+    <path d="M110 460 L140 250 C145 225 175 220 200 225 L215 350 L160 460 Z" fill="url(#coatGrad)" />
+    <path d="M350 460 L320 250 C315 225 285 220 260 225 L245 350 L300 460 Z" fill="url(#coatGrad)" />
+    <!-- Coat lapels -->
+    <path d="M175 220 L210 320 L160 460 H300 L250 320 L285 220" stroke="#CBD5E1" stroke-width="2" fill="none" />
+
+    <!-- Center Card / Badge Badge -->
+    <g transform="translate(130, 370)">
+      <rect width="200" height="58" rx="12" fill="#FFFFFF" stroke="#0AA8DE" stroke-width="1.8" filter="drop-shadow(0 4px 6px rgba(0,0,0,0.06))" />
+      <text x="100" y="24" font-family="'Manrope', sans-serif" font-weight="800" font-size="13" fill="#0F172A" text-anchor="middle">DOCTOR PHOTOGRAPH</text>
+      <text x="100" y="42" font-family="'Inter', sans-serif" font-weight="600" font-size="10.5" fill="#0AA8DE" text-anchor="middle">Chief Dental Specialist</text>
+    </g>
+  </g>
+</svg>

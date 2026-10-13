@@ -1,154 +1,83 @@
 -- ============================================================================
--- DENTPRO OS - COMPLETE SCHEMA MIGRATION
+-- DENTPRO OS - 32 SMILES STANDALONE SINGLE-CLINIC CANONICAL MIGRATION
 -- ============================================================================
--- Complete, single-file DDL script creating all required tables, RLS policies,
--- functions, and default seed data for the DentPro OS dental practice management application.
+-- Complete, single-file DDL script for 32 Smiles Multispeciality Dental Clinic.
+-- Standalone single-clinic database architecture (No multi-tenant clinic_id).
+-- Strict 2-Role RBAC: 'owner' (Full Clinical/Admin) vs 'receptionist' (Admin/Billing).
+-- Fully idempotent (IF NOT EXISTS / DROP IF EXISTS) and safe for execution in 
+-- the Supabase SQL Editor for project `gjxpellqcgxlicbylbhe`.
 --
--- Design Principles:
--- 1. UUID primary keys for all new tables.
--- 2. Tenant isolation via clinic_id foreign key referencing public.clinics(id).
--- 3. Row-Level Security (RLS) on all tables using non-recursive security definer helper.
--- 4. Database-safe patient display ID (DS-xxxx) sequence generation.
--- 5. Safe, additive changes preserving existing data.
--- 6. Production-safe re-runnability (DROP POLICY IF EXISTS & DROP TRIGGER IF EXISTS).
--- 7. Focused strictly on structured clinic records (No file/media/binary storage).
+-- DEPENDENCY-SAFE PHASE ARCHITECTURE:
+-- Phase 1: Extensions
+-- Phase 2: Core Tables (Ordered by FK dependencies: profiles -> patients -> doctors -> appointments...)
+-- Phase 3: Sequences
+-- Phase 4: Helper Functions (Created ONLY after referenced tables exist)
+-- Phase 5: Triggers (Created ONLY after tables and functions exist)
+-- Phase 6: Indexes & Unique Constraints
+-- Phase 7: Seed Data (Initial Medicines)
+-- Phase 8: Row Level Security (RLS) Policies
+-- Phase 9: Permissions & Grants
 -- ============================================================================
 
 -- ----------------------------------------------------------------------------
--- 1. EXTENSIONS
+-- PHASE 1: EXTENSIONS
 -- ----------------------------------------------------------------------------
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- ----------------------------------------------------------------------------
--- 2. HELPER FUNCTIONS
+-- PHASE 2: CORE SINGLE-CLINIC TABLES CREATION (DEPENDENCY-SAFE ORDER - 14 TABLES)
 -- ----------------------------------------------------------------------------
 
--- A. get_user_clinic_id()
--- Resolves the authenticated user's clinic_id from public.profiles.
--- Configured with SECURITY DEFINER and a fixed search_path to prevent execution-context
--- hijacking and eliminate infinite recursion loops during RLS policy evaluations.
-CREATE OR REPLACE FUNCTION public.get_user_clinic_id()
-RETURNS UUID
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-    v_clinic_id UUID;
-BEGIN
-    SELECT clinic_id INTO v_clinic_id
-    FROM public.profiles
-    WHERE id = auth.uid();
-    
-    RETURN v_clinic_id;
-END;
-$$;
-
--- Security Hardening: Revoke default PUBLIC privileges and grant selectively.
-REVOKE ALL ON FUNCTION public.get_user_clinic_id() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public.get_user_clinic_id() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.get_user_clinic_id() TO service_role;
-
-COMMENT ON FUNCTION public.get_user_clinic_id() IS 
-'Retrieves the authenticated user''s clinic_id securely, avoiding RLS policy recursion on profiles.';
-
--- B. handle_updated_at()
--- Triggers automatic timestamp update on modification.
-CREATE OR REPLACE FUNCTION public.handle_updated_at()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    NEW.updated_at = now();
-    RETURN NEW;
-END;
-$$;
-
--- ----------------------------------------------------------------------------
--- 3. SEQUENCES & GENERATORS FOR PATIENT DISPLAY ID (DS-xxxx)
--- ----------------------------------------------------------------------------
-CREATE SEQUENCE IF NOT EXISTS public.patient_id_seq START 1001;
-
--- Reset sequence to the highest existing sequence number if patients already exist
-SELECT setval(
-    'public.patient_id_seq', 
-    COALESCE(
-        (SELECT MAX(SUBSTRING(patient_id FROM '[0-9]+')::integer) FROM public.patients WHERE patient_id LIKE 'DS-%'),
-        1000
-    )
+-- Table 1: Staff Profiles Table (No FK dependencies)
+CREATE TABLE IF NOT EXISTS public.profiles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    full_name TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('owner', 'receptionist')),
+    custom_title TEXT,
+    phone TEXT,
+    status TEXT CHECK (status IN ('Active', 'Inactive', 'On Leave')) DEFAULT 'Active',
+    has_login BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Trigger function to atomically assign display IDs on insert
-CREATE OR REPLACE FUNCTION public.generate_patient_id()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF NEW.patient_id IS NULL OR NEW.patient_id = '' OR NEW.patient_id LIKE 'DS-%' THEN
-        NEW.patient_id := 'DS-' || nextval('public.patient_id_seq')::text;
-    END IF;
-    RETURN NEW;
-END;
-$$;
+-- Table 2: Patients Table (No FK dependencies)
+CREATE TABLE IF NOT EXISTS public.patients (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    patient_id TEXT UNIQUE,
+    name TEXT NOT NULL,
+    phone TEXT,
+    email TEXT,
+    age TEXT,
+    gender TEXT,
+    address TEXT,
+    visit TEXT,
+    medical_notes TEXT,
+    balance TEXT DEFAULT '₹0',
+    status TEXT CHECK (status IN ('Active', 'Inactive')) DEFAULT 'Active',
+    dental_chart JSONB DEFAULT '{}'::jsonb,
+    prescriptions JSONB DEFAULT '[]'::jsonb,
+    notes JSONB DEFAULT '[]'::jsonb,
+    files JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
 
-DROP TRIGGER IF EXISTS tr_generate_patient_id ON public.patients;
-CREATE TRIGGER tr_generate_patient_id
-    BEFORE INSERT ON public.patients
-    FOR EACH ROW
-    EXECUTE FUNCTION public.generate_patient_id();
-
--- ----------------------------------------------------------------------------
--- 4. NEW TABLES DECLARATION
--- ----------------------------------------------------------------------------
-
--- A. Doctors Table
+-- Table 3: Doctors Table (Depends on public.profiles)
 CREATE TABLE IF NOT EXISTS public.doctors (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
     profile_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
     specialty TEXT,
     phone TEXT,
-    status TEXT CHECK (status IN ('Available', 'In Consultation', 'On Break', 'Finished Today')) DEFAULT 'Available',
+    status TEXT CHECK (status IN ('Available', 'Active', 'In Consultation', 'On Break', 'Finished Today', 'Inactive')) DEFAULT 'Available',
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- B. Staff Table
-CREATE TABLE IF NOT EXISTS public.staff (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    profile_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-    name TEXT NOT NULL,
-    role TEXT,
-    phone TEXT,
-    status TEXT CHECK (status IN ('Active', 'Inactive', 'On Leave')) DEFAULT 'Active',
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-
--- C. Clinic Settings Table
-CREATE TABLE IF NOT EXISTS public.clinic_settings (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID UNIQUE NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    address TEXT,
-    phone TEXT,
-    primary_doctor_id UUID REFERENCES public.doctors(id) ON DELETE SET NULL,
-    receptionist_user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-    whatsapp_enabled BOOLEAN DEFAULT TRUE,
-    email_enabled BOOLEAN DEFAULT TRUE,
-    google_calendar_enabled BOOLEAN DEFAULT FALSE,
-    dental_lab_enabled BOOLEAN DEFAULT TRUE,
-    auto_backup_enabled BOOLEAN DEFAULT TRUE,
-    backup_frequency TEXT DEFAULT 'Daily',
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-
--- D. Appointments Table
+-- Table 4: Appointments Table (Depends on public.patients, public.doctors)
 CREATE TABLE IF NOT EXISTS public.appointments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
     patient_id UUID NOT NULL REFERENCES public.patients(id) ON DELETE CASCADE,
     doctor_id UUID REFERENCES public.doctors(id) ON DELETE SET NULL,
     appointment_date DATE NOT NULL,
@@ -161,33 +90,28 @@ CREATE TABLE IF NOT EXISTS public.appointments (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- E. Dental Chart (Odontogram) Table
-CREATE TABLE IF NOT EXISTS public.dental_chart (
+-- Table 5: Blocked Slots Table (Depends on public.doctors)
+CREATE TABLE IF NOT EXISTS public.blocked_slots (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    patient_id UUID NOT NULL REFERENCES public.patients(id) ON DELETE CASCADE,
-    tooth_number INTEGER NOT NULL,
-    diagnosis TEXT,
-    treatment TEXT,
-    status TEXT CHECK (status IN ('Planned', 'In Progress', 'Completed')) DEFAULT 'Planned',
-    doctor_id UUID REFERENCES public.doctors(id) ON DELETE SET NULL,
-    treatment_date DATE,
-    estimated_cost NUMERIC,
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
+    blocked_date DATE NOT NULL,
+    time_slot TEXT NOT NULL,
+    doctor_id UUID REFERENCES public.doctors(id) ON DELETE CASCADE,
+    reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- F. Treatments Table
+-- Table 6: Treatments Catalog & Clinical Records Table (Depends on public.patients, public.doctors)
 CREATE TABLE IF NOT EXISTS public.treatments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    patient_id UUID NOT NULL REFERENCES public.patients(id) ON DELETE CASCADE,
+    patient_id UUID REFERENCES public.patients(id) ON DELETE CASCADE,
     doctor_id UUID REFERENCES public.doctors(id) ON DELETE SET NULL,
     name TEXT NOT NULL,
-    stage TEXT CHECK (stage IN ('Planned', 'In Progress', 'Completed')) DEFAULT 'Planned',
-    tooth_number INTEGER,
+    category TEXT,
     cost NUMERIC NOT NULL DEFAULT 0,
+    duration TEXT,
+    stage TEXT CHECK (stage IN ('Planned', 'In Progress', 'Completed')) DEFAULT 'Planned',
+    status TEXT DEFAULT 'Active',
+    tooth_number INTEGER,
     diagnosis TEXT,
     notes TEXT,
     treatment_date DATE,
@@ -195,359 +119,531 @@ CREATE TABLE IF NOT EXISTS public.treatments (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- G. Prescriptions Table
-CREATE TABLE IF NOT EXISTS public.prescriptions (
+-- Table 7: Billing & Receipts Table (Depends on public.patients)
+CREATE TABLE IF NOT EXISTS public.billing (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    patient_id UUID NOT NULL REFERENCES public.patients(id) ON DELETE CASCADE,
-    doctor_id UUID REFERENCES public.doctors(id) ON DELETE SET NULL,
-    prescription_date DATE DEFAULT CURRENT_DATE,
-    diagnosis TEXT,
-    advice TEXT,
-    medicines JSONB DEFAULT '[]'::jsonb,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-
--- H. Clinical Notes Table
-CREATE TABLE IF NOT EXISTS public.clinical_notes (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    patient_id UUID NOT NULL REFERENCES public.patients(id) ON DELETE CASCADE,
-    author_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-    title TEXT NOT NULL,
-    category TEXT DEFAULT 'General',
-    content TEXT NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now()
-);
-
--- I. Invoices Table
-CREATE TABLE IF NOT EXISTS public.invoices (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    patient_id UUID REFERENCES public.patients(id) ON DELETE SET NULL,
-    invoice_id TEXT NOT NULL,
-    subtotal NUMERIC NOT NULL DEFAULT 0,
-    discount NUMERIC DEFAULT 0,
-    discount_type TEXT CHECK (discount_type IN ('percentage', 'fixed')) DEFAULT 'percentage',
-    discount_value NUMERIC DEFAULT 0,
-    tax NUMERIC DEFAULT 0,
-    total NUMERIC NOT NULL DEFAULT 0,
+    receipt_id TEXT,
+    patient_id UUID REFERENCES public.patients(id) ON DELETE CASCADE,
+    patient_name TEXT,
+    treatment TEXT,
+    subtotal NUMERIC DEFAULT 0,
+    total NUMERIC DEFAULT 0,
+    paid_amount NUMERIC DEFAULT 0,
+    payment_method TEXT,
+    payment_date TIMESTAMPTZ DEFAULT now(),
     status TEXT CHECK (status IN ('Paid', 'Partially Paid', 'Unpaid', 'Pending')) DEFAULT 'Unpaid',
+    items JSONB DEFAULT '[]'::jsonb,
+    payment_logs JSONB DEFAULT '[]'::jsonb,
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- J. Invoice Items Table
-CREATE TABLE IF NOT EXISTS public.invoice_items (
+-- Table 8: Medicines Catalogue Table (No internal FK dependencies)
+CREATE TABLE IF NOT EXISTS public.medicines (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    invoice_id UUID NOT NULL REFERENCES public.invoices(id) ON DELETE CASCADE,
-    treatment_id UUID REFERENCES public.treatments(id) ON DELETE SET NULL,
-    description TEXT NOT NULL,
-    doctor_id UUID REFERENCES public.doctors(id) ON DELETE SET NULL,
-    quantity INTEGER NOT NULL DEFAULT 1,
-    unit_price NUMERIC NOT NULL DEFAULT 0,
-    amount NUMERIC NOT NULL DEFAULT 0,
+    name TEXT UNIQUE NOT NULL,
+    stock_unit TEXT NOT NULL DEFAULT 'tablets',
+    opening_stock NUMERIC NULL,
+    available_quantity NUMERIC NULL,
+    low_stock_threshold NUMERIC NOT NULL DEFAULT 5,
+    is_active BOOLEAN NOT NULL DEFAULT true,
+    is_configured BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Table 9: Stock Transactions Table (Depends on public.medicines, auth.users)
+CREATE TABLE IF NOT EXISTS public.stock_transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    medicine_id UUID NOT NULL REFERENCES public.medicines(id) ON DELETE CASCADE,
+    transaction_type TEXT NOT NULL CHECK (transaction_type IN ('opening_stock', 'received', 'dispensed', 'adjustment')),
+    quantity NUMERIC NOT NULL,
+    previous_quantity NUMERIC NULL,
+    new_quantity NUMERIC NOT NULL,
+    transaction_date TIMESTAMPTZ NOT NULL DEFAULT now(),
+    reference TEXT NULL,
+    notes TEXT NULL,
+    prescription_id TEXT NULL,
+    created_by UUID REFERENCES auth.users(id),
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- K. Payments Table
-CREATE TABLE IF NOT EXISTS public.payments (
+-- Table 10: Patient Prescriptions Table (No internal FK dependencies)
+CREATE TABLE IF NOT EXISTS public.patient_prescriptions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    invoice_id UUID NOT NULL REFERENCES public.invoices(id) ON DELETE CASCADE,
-    patient_id UUID REFERENCES public.patients(id) ON DELETE SET NULL,
-    amount NUMERIC NOT NULL DEFAULT 0,
-    payment_method TEXT CHECK (payment_method IN ('Cash', 'UPI', 'Card')) DEFAULT 'Cash',
-    payment_date DATE DEFAULT CURRENT_DATE,
-    notes TEXT,
-    created_at TIMESTAMPTZ DEFAULT now()
+    patient_id TEXT NOT NULL,
+    patient_name TEXT NOT NULL,
+    doctor_name TEXT NOT NULL,
+    prescription_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    diagnosis TEXT NULL,
+    advice TEXT NULL,
+    items JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
 );
 
--- L. Notifications Table
-CREATE TABLE IF NOT EXISTS public.notifications (
+-- Table 11: Persistent Database Backup History Table (No internal FK dependencies)
+CREATE TABLE IF NOT EXISTS public.backup_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES public.profiles(id) ON DELETE CASCADE,
-    title TEXT NOT NULL,
-    message TEXT NOT NULL,
-    type TEXT DEFAULT 'info',
-    is_read BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT now()
+    status TEXT NOT NULL CHECK (status IN ('triggered', 'pending', 'completed', 'failed')),
+    backup_size BIGINT NULL,
+    file_name TEXT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at TIMESTAMPTZ NULL
 );
 
--- M. Activities Table
+-- Table 12: Activities Audit Log Table (No internal FK dependencies)
 CREATE TABLE IF NOT EXISTS public.activities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    clinic_id UUID NOT NULL REFERENCES public.clinics(id) ON DELETE CASCADE,
-    user_id UUID REFERENCES public.profiles(id) ON DELETE SET NULL,
-    action TEXT NOT NULL,
-    entity_type TEXT NOT NULL,
-    entity_id UUID,
-    description TEXT NOT NULL,
+    title TEXT NOT NULL,
+    user_name TEXT,
+    timestamp TIMESTAMPTZ DEFAULT now(),
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- ----------------------------------------------------------------------------
--- 5. SAFE ALTERATIONS TO EXISTING TABLES
--- ----------------------------------------------------------------------------
+-- Table 13: System Notifications Table (No internal FK dependencies)
+CREATE TABLE IF NOT EXISTS public.notifications (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    title TEXT NOT NULL,
+    time TEXT,
+    type TEXT,
+    is_read BOOLEAN DEFAULT false,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
 
--- Alter Patients Table
-ALTER TABLE public.patients ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
-
--- ----------------------------------------------------------------------------
--- 6. AUTOMATED TIMESTAMPS TRIGGERS
--- ----------------------------------------------------------------------------
-DROP TRIGGER IF EXISTS tr_updated_at_patients ON public.patients;
-CREATE TRIGGER tr_updated_at_patients BEFORE UPDATE ON public.patients FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_doctors ON public.doctors;
-CREATE TRIGGER tr_updated_at_doctors BEFORE UPDATE ON public.doctors FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_staff ON public.staff;
-CREATE TRIGGER tr_updated_at_staff BEFORE UPDATE ON public.staff FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_clinic_settings ON public.clinic_settings;
-CREATE TRIGGER tr_updated_at_clinic_settings BEFORE UPDATE ON public.clinic_settings FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_appointments ON public.appointments;
-CREATE TRIGGER tr_updated_at_appointments BEFORE UPDATE ON public.appointments FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_dental_chart ON public.dental_chart;
-CREATE TRIGGER tr_updated_at_dental_chart BEFORE UPDATE ON public.dental_chart FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_treatments ON public.treatments;
-CREATE TRIGGER tr_updated_at_treatments BEFORE UPDATE ON public.treatments FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_prescriptions ON public.prescriptions;
-CREATE TRIGGER tr_updated_at_prescriptions BEFORE UPDATE ON public.prescriptions FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_clinical_notes ON public.clinical_notes;
-CREATE TRIGGER tr_updated_at_clinical_notes BEFORE UPDATE ON public.clinical_notes FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
-
-DROP TRIGGER IF EXISTS tr_updated_at_invoices ON public.invoices;
-CREATE TRIGGER tr_updated_at_invoices BEFORE UPDATE ON public.invoices FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+-- Table 14: Clinic Settings Table (No internal FK dependencies)
+CREATE TABLE IF NOT EXISTS public.clinic_settings (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    clinic_name TEXT DEFAULT '32 Smiles Multispeciality Dental Clinic',
+    tagline TEXT,
+    address TEXT,
+    phone TEXT,
+    email TEXT,
+    website TEXT,
+    logo_url TEXT,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
 
 -- ----------------------------------------------------------------------------
--- 7. PERFORMANCE INDEXES
+-- PHASE 3: SEQUENCES
+-- (MUST RUN AFTER public.patients EXISTS)
 -- ----------------------------------------------------------------------------
+CREATE SEQUENCE IF NOT EXISTS public.patient_id_seq START 1001;
 
--- A. Generic Single-Column Foreign Key Indexes
-CREATE INDEX IF NOT EXISTS idx_doctors_clinic_id ON public.doctors(clinic_id);
-CREATE INDEX IF NOT EXISTS idx_staff_clinic_id ON public.staff(clinic_id);
-CREATE INDEX IF NOT EXISTS idx_appointments_clinic_id ON public.appointments(clinic_id);
-CREATE INDEX IF NOT EXISTS idx_appointments_patient_id ON public.appointments(patient_id);
-CREATE INDEX IF NOT EXISTS idx_appointments_doctor_id ON public.appointments(doctor_id);
-CREATE INDEX IF NOT EXISTS idx_dental_chart_patient_id ON public.dental_chart(patient_id);
-CREATE INDEX IF NOT EXISTS idx_treatments_patient_id ON public.treatments(patient_id);
-CREATE INDEX IF NOT EXISTS idx_prescriptions_patient_id ON public.prescriptions(patient_id);
-CREATE INDEX IF NOT EXISTS idx_clinical_notes_patient_id ON public.clinical_notes(patient_id);
-CREATE INDEX IF NOT EXISTS idx_invoices_patient_id ON public.invoices(patient_id);
-CREATE INDEX IF NOT EXISTS idx_invoice_items_invoice_id ON public.invoice_items(invoice_id);
-CREATE INDEX IF NOT EXISTS idx_payments_invoice_id ON public.payments(invoice_id);
-CREATE INDEX IF NOT EXISTS idx_payments_patient_id ON public.payments(patient_id);
-
--- B. Optimization Composite Indexes
-CREATE INDEX IF NOT EXISTS idx_patients_clinic_patient ON public.patients(clinic_id, id);
-CREATE INDEX IF NOT EXISTS idx_appointments_clinic_date ON public.appointments(clinic_id, appointment_date);
-CREATE INDEX IF NOT EXISTS idx_appointments_clinic_status ON public.appointments(clinic_id, status);
-CREATE INDEX IF NOT EXISTS idx_invoices_clinic_status ON public.invoices(clinic_id, status);
-CREATE INDEX IF NOT EXISTS idx_patients_phone ON public.patients(phone);
-CREATE INDEX IF NOT EXISTS idx_payments_date ON public.payments(payment_date);
+SELECT setval(
+    'public.patient_id_seq', 
+    COALESCE(
+        (SELECT MAX(SUBSTRING(patient_id FROM '[0-9]+')::integer) FROM public.patients WHERE patient_id LIKE 'DS-%'),
+        1000
+    )
+);
 
 -- ----------------------------------------------------------------------------
--- 8. ROW LEVEL SECURITY (RLS) ACTIVATION
+-- PHASE 4: HELPER FUNCTIONS (7 FUNCTIONS TOTAL)
+-- (CREATED ONLY AFTER ALL REFERENCED TABLES EXIST)
 -- ----------------------------------------------------------------------------
+
+-- Function 1: Timestamp modifier trigger function
+CREATE OR REPLACE FUNCTION public.handle_updated_at()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+END;
+$$;
+
+-- Function 2: Single-Clinic Role Resolution Helper Function
+-- Returns the user's role ('owner' or 'receptionist') from public.profiles.
+-- Executed after public.profiles exists.
+CREATE OR REPLACE FUNCTION public.get_user_role()
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT COALESCE((SELECT role FROM public.profiles WHERE id = auth.uid()), 'receptionist');
+$$;
+
+REVOKE ALL ON FUNCTION public.get_user_role() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.get_user_role() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_user_role() TO service_role;
+
+-- Function 3: Trigger Function to Keep has_login Synced with Auth Users
+CREATE OR REPLACE FUNCTION public.handle_profile_has_login()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    NEW.has_login := EXISTS (SELECT 1 FROM auth.users WHERE id = NEW.id);
+    RETURN NEW;
+END;
+$$;
+
+-- Function 4: Trigger Function for User Deletion Cleanup
+CREATE OR REPLACE FUNCTION public.handle_user_delete()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    DELETE FROM public.profiles WHERE id = OLD.id;
+    RETURN OLD;
+END;
+$$;
+
+-- Function 5: Atomic Bootstrap & Registration Trigger
+-- First registered user becomes active Owner; subsequent signups default to Receptionist.
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_owner_count INT;
+BEGIN
+    PERFORM pg_advisory_xact_lock(hashtext('single_clinic_owner_bootstrap_lock'));
+    SELECT COUNT(*) INTO v_owner_count FROM public.profiles WHERE role = 'owner';
+    
+    IF v_owner_count = 0 THEN
+        INSERT INTO public.profiles (id, full_name, role, has_login, status)
+        VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email), 'owner', true, 'Active')
+        ON CONFLICT (id) DO UPDATE SET role = 'owner', status = 'Active';
+    ELSE
+        INSERT INTO public.profiles (id, full_name, role, has_login, status)
+        VALUES (NEW.id, COALESCE(NEW.raw_user_meta_data->>'full_name', NEW.email), 'receptionist', true, 'Inactive')
+        ON CONFLICT (id) DO NOTHING;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+-- Function 6: Patient Display ID (DS-xxxx) Generator
+-- Depends on public.patient_id_seq sequence
+CREATE OR REPLACE FUNCTION public.generate_patient_id()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.patient_id IS NULL OR NEW.patient_id = '' THEN
+        NEW.patient_id := 'DS-' || nextval('public.patient_id_seq')::text;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+-- Function 7: Patient Clinical Column Protection Trigger Function
+-- Depends on get_user_role() and public.patients
+CREATE OR REPLACE FUNCTION public.enforce_patient_column_permissions()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF public.get_user_role() = 'receptionist' THEN
+        IF TG_OP = 'INSERT' THEN
+            -- On INSERT, receptionists cannot inject clinical data:
+            -- dental_chart, prescriptions, files, or notes must not contain clinical data.
+            IF (NEW.dental_chart IS NOT NULL AND NEW.dental_chart IS DISTINCT FROM '{}'::jsonb) OR
+               (NEW.prescriptions IS NOT NULL AND NEW.prescriptions IS DISTINCT FROM '[]'::jsonb) OR
+               (NEW.files IS NOT NULL AND NEW.files IS DISTINCT FROM '[]'::jsonb) OR
+               (NEW.notes IS NOT NULL AND NEW.notes IS DISTINCT FROM '[]'::jsonb) THEN
+                RAISE EXCEPTION 'Access Denied: Receptionists are not permitted to insert clinical patient data (dental_chart, prescriptions, files, notes).';
+            END IF;
+        ELSIF TG_OP = 'UPDATE' THEN
+            -- On UPDATE, receptionists cannot modify any clinical patient fields.
+            IF (NEW.medical_notes IS DISTINCT FROM OLD.medical_notes) OR
+               (NEW.dental_chart IS DISTINCT FROM OLD.dental_chart) OR
+               (NEW.prescriptions IS DISTINCT FROM OLD.prescriptions) OR
+               (NEW.notes IS DISTINCT FROM OLD.notes) OR
+               (NEW.files IS DISTINCT FROM OLD.files) THEN
+                RAISE EXCEPTION 'Access Denied: Receptionists are not permitted to modify clinical patient data (medical_notes, dental_chart, prescriptions, notes, files).';
+            END IF;
+        END IF;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.enforce_patient_column_permissions() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.enforce_patient_column_permissions() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.enforce_patient_column_permissions() TO service_role;
+
+-- ----------------------------------------------------------------------------
+-- PHASE 5: TRIGGERS
+-- (CREATED ONLY AFTER TABLES AND FUNCTIONS EXIST)
+-- ----------------------------------------------------------------------------
+
+-- Patient ID Generator Trigger
+DROP TRIGGER IF EXISTS tr_generate_patient_id ON public.patients;
+CREATE TRIGGER tr_generate_patient_id
+    BEFORE INSERT ON public.patients
+    FOR EACH ROW EXECUTE FUNCTION public.generate_patient_id();
+
+-- Auth User Creation -> Profile Bootstrap Trigger
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+CREATE TRIGGER on_auth_user_created
+    AFTER INSERT ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+
+-- Profile Login Flag Sync Trigger
+DROP TRIGGER IF EXISTS tr_profile_has_login ON public.profiles;
+CREATE TRIGGER tr_profile_has_login
+    BEFORE INSERT OR UPDATE OF id ON public.profiles
+    FOR EACH ROW EXECUTE FUNCTION public.handle_profile_has_login();
+
+-- Auth User Delete -> Profile Delete Trigger
+DROP TRIGGER IF EXISTS tr_user_delete ON auth.users;
+CREATE TRIGGER tr_user_delete
+    AFTER DELETE ON auth.users
+    FOR EACH ROW EXECUTE FUNCTION public.handle_user_delete();
+
+-- Updated At Timestamps Triggers
+DROP TRIGGER IF EXISTS tr_profiles_updated_at ON public.profiles;
+CREATE TRIGGER tr_profiles_updated_at BEFORE UPDATE ON public.profiles FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS tr_patients_updated_at ON public.patients;
+CREATE TRIGGER tr_patients_updated_at BEFORE UPDATE ON public.patients FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS tr_doctors_updated_at ON public.doctors;
+CREATE TRIGGER tr_doctors_updated_at BEFORE UPDATE ON public.doctors FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS tr_appointments_updated_at ON public.appointments;
+CREATE TRIGGER tr_appointments_updated_at BEFORE UPDATE ON public.appointments FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS tr_treatments_updated_at ON public.treatments;
+CREATE TRIGGER tr_treatments_updated_at BEFORE UPDATE ON public.treatments FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS tr_billing_updated_at ON public.billing;
+CREATE TRIGGER tr_billing_updated_at BEFORE UPDATE ON public.billing FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS tr_medicines_updated_at ON public.medicines;
+CREATE TRIGGER tr_medicines_updated_at BEFORE UPDATE ON public.medicines FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+DROP TRIGGER IF EXISTS tr_patient_prescriptions_updated_at ON public.patient_prescriptions;
+CREATE TRIGGER tr_patient_prescriptions_updated_at BEFORE UPDATE ON public.patient_prescriptions FOR EACH ROW EXECUTE FUNCTION public.handle_updated_at();
+
+-- Patient Clinical Column Protection Trigger
+DROP TRIGGER IF EXISTS tr_enforce_patient_column_permissions ON public.patients;
+CREATE TRIGGER tr_enforce_patient_column_permissions
+    BEFORE INSERT OR UPDATE ON public.patients
+    FOR EACH ROW EXECUTE FUNCTION public.enforce_patient_column_permissions();
+
+-- ----------------------------------------------------------------------------
+-- PHASE 6: INDEXES & UNIQUE CONSTRAINTS
+-- ----------------------------------------------------------------------------
+CREATE INDEX IF NOT EXISTS idx_patients_patient_id ON public.patients(patient_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_patient ON public.appointments(patient_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_doctor ON public.appointments(doctor_id);
+CREATE INDEX IF NOT EXISTS idx_appointments_date ON public.appointments(appointment_date);
+
+-- Prevent active doctor double-booking on same slot
+DROP INDEX IF EXISTS public.idx_appointments_no_double_booking;
+CREATE UNIQUE INDEX idx_appointments_no_double_booking 
+ON public.appointments (doctor_id, appointment_date, time_slot) 
+WHERE (status != 'Cancelled' AND status != 'No Show' AND doctor_id IS NOT NULL);
+
+-- Blocked Slots Indexing
+CREATE INDEX IF NOT EXISTS blocked_slots_date_idx ON public.blocked_slots(blocked_date);
+DROP INDEX IF EXISTS public.blocked_slots_unique_idx;
+CREATE UNIQUE INDEX blocked_slots_unique_idx 
+ON public.blocked_slots (blocked_date, time_slot, COALESCE(doctor_id, '00000000-0000-0000-0000-000000000000'::uuid));
+
+-- Medicine Inventory Indexing
+CREATE INDEX IF NOT EXISTS idx_medicines_active ON public.medicines(is_active);
+CREATE INDEX IF NOT EXISTS idx_stock_transactions_med ON public.stock_transactions(medicine_id);
+CREATE INDEX IF NOT EXISTS idx_stock_transactions_date ON public.stock_transactions(transaction_date);
+CREATE INDEX IF NOT EXISTS idx_patient_prescriptions_patient ON public.patient_prescriptions(patient_id);
+
+-- ----------------------------------------------------------------------------
+-- PHASE 7: INITIAL MEDICINES SEED DATA (EXACTLY 11 DEFAULT MEDICINES, UNSET QUANTITIES)
+-- ----------------------------------------------------------------------------
+INSERT INTO public.medicines (name, stock_unit, low_stock_threshold, is_active, is_configured, opening_stock, available_quantity)
+VALUES
+    ('Roles-D', 'tablets', 5, true, false, NULL, NULL),
+    ('Taxim-O 200', 'tablets', 5, true, false, NULL, NULL),
+    ('Acecloren', 'tablets', 5, true, false, NULL, NULL),
+    ('Zerodol-MR', 'tablets', 5, true, false, NULL, NULL),
+    ('Flagyl 400', 'tablets', 5, true, false, NULL, NULL),
+    ('Zerodol-SP', 'tablets', 5, true, false, NULL, NULL),
+    ('Orahex-DG', 'bottles', 5, true, false, NULL, NULL),
+    ('Sensodent-K', 'tubes', 5, true, false, NULL, NULL),
+    ('Orohealth Toothpaste', 'tubes', 5, true, false, NULL, NULL),
+    ('Ornigreat Gel', 'tubes', 5, true, false, NULL, NULL),
+    ('Flagyl Gel', 'tubes', 5, true, false, NULL, NULL)
+ON CONFLICT (name) DO NOTHING;
+
+-- ----------------------------------------------------------------------------
+-- PHASE 8: ROW LEVEL SECURITY (RLS) POLICIES
+-- (SAFE TO REFERENCE get_user_role() AFTER PROFILES AND get_user_role() EXIST)
+-- ----------------------------------------------------------------------------
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.patients ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.doctors ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.staff ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.clinic_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.appointments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.dental_chart ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.blocked_slots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.treatments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.prescriptions ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.clinical_notes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.invoices ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.invoice_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.billing ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.medicines ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.stock_transactions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.patient_prescriptions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.backup_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.activities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.clinic_settings ENABLE ROW LEVEL SECURITY;
+
+-- A. Profiles RLS
+DROP POLICY IF EXISTS "Allow authenticated read profiles" ON public.profiles;
+CREATE POLICY "Allow authenticated read profiles" ON public.profiles
+    FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow owner write profiles" ON public.profiles;
+CREATE POLICY "Allow owner write profiles" ON public.profiles
+    FOR ALL TO authenticated
+    USING (public.get_user_role() = 'owner')
+    WITH CHECK (public.get_user_role() = 'owner');
+
+-- B. Patients RLS
+DROP POLICY IF EXISTS "Allow staff read patients" ON public.patients;
+CREATE POLICY "Allow staff read patients" ON public.patients FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow staff write patients" ON public.patients;
+
+DROP POLICY IF EXISTS "Allow staff insert patients" ON public.patients;
+CREATE POLICY "Allow staff insert patients" ON public.patients
+    FOR INSERT TO authenticated
+    WITH CHECK (public.get_user_role() IN ('owner', 'receptionist'));
+
+DROP POLICY IF EXISTS "Allow staff update patients" ON public.patients;
+CREATE POLICY "Allow staff update patients" ON public.patients
+    FOR UPDATE TO authenticated
+    USING (public.get_user_role() IN ('owner', 'receptionist'))
+    WITH CHECK (public.get_user_role() IN ('owner', 'receptionist'));
+
+DROP POLICY IF EXISTS "Allow owner delete patients" ON public.patients;
+CREATE POLICY "Allow owner delete patients" ON public.patients
+    FOR DELETE TO authenticated
+    USING (public.get_user_role() = 'owner');
+
+-- C. Doctors RLS
+DROP POLICY IF EXISTS "Allow staff read doctors" ON public.doctors;
+CREATE POLICY "Allow staff read doctors" ON public.doctors FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow owner write doctors" ON public.doctors;
+CREATE POLICY "Allow owner write doctors" ON public.doctors
+    FOR ALL TO authenticated
+    USING (public.get_user_role() = 'owner')
+    WITH CHECK (public.get_user_role() = 'owner');
+
+-- D. Appointments & Blocked Slots RLS
+DROP POLICY IF EXISTS "Allow staff read appointments" ON public.appointments;
+CREATE POLICY "Allow staff read appointments" ON public.appointments FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow staff write appointments" ON public.appointments;
+CREATE POLICY "Allow staff write appointments" ON public.appointments
+    FOR ALL TO authenticated
+    USING (public.get_user_role() IN ('owner', 'receptionist'))
+    WITH CHECK (public.get_user_role() IN ('owner', 'receptionist'));
+
+DROP POLICY IF EXISTS "Allow staff read blocked_slots" ON public.blocked_slots;
+CREATE POLICY "Allow staff read blocked_slots" ON public.blocked_slots FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow staff write blocked_slots" ON public.blocked_slots;
+CREATE POLICY "Allow staff write blocked_slots" ON public.blocked_slots
+    FOR ALL TO authenticated
+    USING (public.get_user_role() IN ('owner', 'receptionist'))
+    WITH CHECK (public.get_user_role() IN ('owner', 'receptionist'));
+
+-- E. Treatments Clinical RLS
+DROP POLICY IF EXISTS "Allow staff read treatments" ON public.treatments;
+CREATE POLICY "Allow staff read treatments" ON public.treatments FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow owner write treatments" ON public.treatments;
+CREATE POLICY "Allow owner write treatments" ON public.treatments
+    FOR ALL TO authenticated
+    USING (public.get_user_role() = 'owner')
+    WITH CHECK (public.get_user_role() = 'owner');
+
+-- F. Billing RLS
+DROP POLICY IF EXISTS "Allow staff read billing" ON public.billing;
+CREATE POLICY "Allow staff read billing" ON public.billing FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow staff write billing" ON public.billing;
+CREATE POLICY "Allow staff write billing" ON public.billing
+    FOR ALL TO authenticated
+    USING (public.get_user_role() IN ('owner', 'receptionist'))
+    WITH CHECK (public.get_user_role() IN ('owner', 'receptionist'));
+
+-- G. Medicine Stock Inventory RLS
+DROP POLICY IF EXISTS "Allow staff read medicines" ON public.medicines;
+CREATE POLICY "Allow staff read medicines" ON public.medicines FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow owner write medicines" ON public.medicines;
+CREATE POLICY "Allow owner write medicines" ON public.medicines
+    FOR ALL TO authenticated
+    USING (public.get_user_role() = 'owner')
+    WITH CHECK (public.get_user_role() = 'owner');
+
+-- H. Stock Transactions Audit Log RLS
+DROP POLICY IF EXISTS "Allow owner access stock_transactions" ON public.stock_transactions;
+CREATE POLICY "Allow owner access stock_transactions" ON public.stock_transactions
+    FOR ALL TO authenticated
+    USING (public.get_user_role() = 'owner')
+    WITH CHECK (public.get_user_role() = 'owner');
+
+-- I. Patient Prescriptions RLS
+DROP POLICY IF EXISTS "Allow staff read patient_prescriptions" ON public.patient_prescriptions;
+CREATE POLICY "Allow staff read patient_prescriptions" ON public.patient_prescriptions FOR SELECT TO authenticated USING (true);
+
+DROP POLICY IF EXISTS "Allow owner write patient_prescriptions" ON public.patient_prescriptions;
+CREATE POLICY "Allow owner write patient_prescriptions" ON public.patient_prescriptions
+    FOR ALL TO authenticated
+    USING (public.get_user_role() = 'owner')
+    WITH CHECK (public.get_user_role() = 'owner');
+
+-- J. Backup History Audit Log RLS
+DROP POLICY IF EXISTS "Owner full access on backup_history" ON public.backup_history;
+CREATE POLICY "Owner full access on backup_history" ON public.backup_history
+    FOR ALL TO authenticated
+    USING (public.get_user_role() = 'owner')
+    WITH CHECK (public.get_user_role() = 'owner');
+
+-- K. Activities & Notifications RLS
+DROP POLICY IF EXISTS "Allow staff read activities" ON public.activities;
+CREATE POLICY "Allow staff read activities" ON public.activities FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow staff write activities" ON public.activities;
+CREATE POLICY "Allow staff write activities" ON public.activities FOR ALL TO authenticated USING (public.get_user_role() IN ('owner', 'receptionist')) WITH CHECK (public.get_user_role() IN ('owner', 'receptionist'));
+
+DROP POLICY IF EXISTS "Allow staff read notifications" ON public.notifications;
+CREATE POLICY "Allow staff read notifications" ON public.notifications FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS "Allow staff write notifications" ON public.notifications;
+CREATE POLICY "Allow staff write notifications" ON public.notifications FOR ALL TO authenticated USING (public.get_user_role() IN ('owner', 'receptionist')) WITH CHECK (public.get_user_role() IN ('owner', 'receptionist'));
+
+-- L. Clinic Settings RLS
+DROP POLICY IF EXISTS "Allow staff read clinic_settings" ON public.clinic_settings;
+DROP POLICY IF EXISTS "Allow owner read clinic_settings" ON public.clinic_settings;
+CREATE POLICY "Allow owner read clinic_settings" ON public.clinic_settings
+    FOR SELECT TO authenticated
+    USING (public.get_user_role() = 'owner');
+
+DROP POLICY IF EXISTS "Allow owner write clinic_settings" ON public.clinic_settings;
+CREATE POLICY "Allow owner write clinic_settings" ON public.clinic_settings
+    FOR ALL TO authenticated
+    USING (public.get_user_role() = 'owner')
+    WITH CHECK (public.get_user_role() = 'owner');
 
 -- ----------------------------------------------------------------------------
--- 9. ROW LEVEL SECURITY (RLS) POLICIES
+-- PHASE 9: PERMISSIONS & GRANTS
 -- ----------------------------------------------------------------------------
-
--- A. Update existing clinics Select policy to avoid recursion
-DROP POLICY IF EXISTS "Allow users to read their own clinic details" ON public.clinics;
-CREATE POLICY "Allow users to read their own clinic details"
-    ON public.clinics
-    FOR SELECT
-    TO authenticated
-    USING (id = public.get_user_clinic_id());
-
--- B. Doctors policies
-DROP POLICY IF EXISTS "Allow users to read doctors in their clinic" ON public.doctors;
-CREATE POLICY "Allow users to read doctors in their clinic"
-    ON public.doctors FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert doctors in their clinic" ON public.doctors;
-CREATE POLICY "Allow users to insert doctors in their clinic"
-    ON public.doctors FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update doctors in their clinic" ON public.doctors;
-CREATE POLICY "Allow users to update doctors in their clinic"
-    ON public.doctors FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to delete doctors in their clinic" ON public.doctors;
-CREATE POLICY "Allow users to delete doctors in their clinic"
-    ON public.doctors FOR DELETE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- C. Staff policies
-DROP POLICY IF EXISTS "Allow users to read staff in their clinic" ON public.staff;
-CREATE POLICY "Allow users to read staff in their clinic"
-    ON public.staff FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert staff in their clinic" ON public.staff;
-CREATE POLICY "Allow users to insert staff in their clinic"
-    ON public.staff FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update staff in their clinic" ON public.staff;
-CREATE POLICY "Allow users to update staff in their clinic"
-    ON public.staff FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to delete staff in their clinic" ON public.staff;
-CREATE POLICY "Allow users to delete staff in their clinic"
-    ON public.staff FOR DELETE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- D. Clinic Settings policies
-DROP POLICY IF EXISTS "Allow users to read settings in their clinic" ON public.clinic_settings;
-CREATE POLICY "Allow users to read settings in their clinic"
-    ON public.clinic_settings FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert settings in their clinic" ON public.clinic_settings;
-CREATE POLICY "Allow users to insert settings in their clinic"
-    ON public.clinic_settings FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update settings in their clinic" ON public.clinic_settings;
-CREATE POLICY "Allow users to update settings in their clinic"
-    ON public.clinic_settings FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- E. Appointments policies
-DROP POLICY IF EXISTS "Allow users to read appointments in their clinic" ON public.appointments;
-CREATE POLICY "Allow users to read appointments in their clinic"
-    ON public.appointments FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert appointments in their clinic" ON public.appointments;
-CREATE POLICY "Allow users to insert appointments in their clinic"
-    ON public.appointments FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update appointments in their clinic" ON public.appointments;
-CREATE POLICY "Allow users to update appointments in their clinic"
-    ON public.appointments FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to delete appointments in their clinic" ON public.appointments;
-CREATE POLICY "Allow users to delete appointments in their clinic"
-    ON public.appointments FOR DELETE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- F. Dental Chart policies
-DROP POLICY IF EXISTS "Allow users to read dental chart in their clinic" ON public.dental_chart;
-CREATE POLICY "Allow users to read dental chart in their clinic"
-    ON public.dental_chart FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert dental chart in their clinic" ON public.dental_chart;
-CREATE POLICY "Allow users to insert dental chart in their clinic"
-    ON public.dental_chart FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update dental chart in their clinic" ON public.dental_chart;
-CREATE POLICY "Allow users to update dental chart in their clinic"
-    ON public.dental_chart FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- G. Treatments policies
-DROP POLICY IF EXISTS "Allow users to read treatments in their clinic" ON public.treatments;
-CREATE POLICY "Allow users to read treatments in their clinic"
-    ON public.treatments FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert treatments in their clinic" ON public.treatments;
-CREATE POLICY "Allow users to insert treatments in their clinic"
-    ON public.treatments FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update treatments in their clinic" ON public.treatments;
-CREATE POLICY "Allow users to update treatments in their clinic"
-    ON public.treatments FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- H. Prescriptions policies
-DROP POLICY IF EXISTS "Allow users to read prescriptions in their clinic" ON public.prescriptions;
-CREATE POLICY "Allow users to read prescriptions in their clinic"
-    ON public.prescriptions FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert prescriptions in their clinic" ON public.prescriptions;
-CREATE POLICY "Allow users to insert prescriptions in their clinic"
-    ON public.prescriptions FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update prescriptions in their clinic" ON public.prescriptions;
-CREATE POLICY "Allow users to update prescriptions in their clinic"
-    ON public.prescriptions FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- I. Clinical Notes policies
-DROP POLICY IF EXISTS "Allow users to read clinical notes in their clinic" ON public.clinical_notes;
-CREATE POLICY "Allow users to read clinical notes in their clinic"
-    ON public.clinical_notes FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert clinical notes in their clinic" ON public.clinical_notes;
-CREATE POLICY "Allow users to insert clinical notes in their clinic"
-    ON public.clinical_notes FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update clinical notes in their clinic" ON public.clinical_notes;
-CREATE POLICY "Allow users to update clinical notes in their clinic"
-    ON public.clinical_notes FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- J. Invoices policies
-DROP POLICY IF EXISTS "Allow users to read invoices in their clinic" ON public.invoices;
-CREATE POLICY "Allow users to read invoices in their clinic"
-    ON public.invoices FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert invoices in their clinic" ON public.invoices;
-CREATE POLICY "Allow users to insert invoices in their clinic"
-    ON public.invoices FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update invoices in their clinic" ON public.invoices;
-CREATE POLICY "Allow users to update invoices in their clinic"
-    ON public.invoices FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- K. Invoice Items policies
-DROP POLICY IF EXISTS "Allow users to read invoice items in their clinic" ON public.invoice_items;
-CREATE POLICY "Allow users to read invoice items in their clinic"
-    ON public.invoice_items FOR SELECT TO authenticated 
-    USING (invoice_id IN (SELECT id FROM public.invoices WHERE clinic_id = public.get_user_clinic_id()));
-
-DROP POLICY IF EXISTS "Allow users to insert invoice items in their clinic" ON public.invoice_items;
-CREATE POLICY "Allow users to insert invoice items in their clinic"
-    ON public.invoice_items FOR INSERT TO authenticated 
-    WITH CHECK (invoice_id IN (SELECT id FROM public.invoices WHERE clinic_id = public.get_user_clinic_id()));
-
--- L. Payments policies
-DROP POLICY IF EXISTS "Allow users to read payments in their clinic" ON public.payments;
-CREATE POLICY "Allow users to read payments in their clinic"
-    ON public.payments FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert payments in their clinic" ON public.payments;
-CREATE POLICY "Allow users to insert payments in their clinic"
-    ON public.payments FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
-
--- M. Notifications policies
-DROP POLICY IF EXISTS "Allow users to read notifications in their clinic" ON public.notifications;
-CREATE POLICY "Allow users to read notifications in their clinic"
-    ON public.notifications FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to update notifications in their clinic" ON public.notifications;
-CREATE POLICY "Allow users to update notifications in their clinic"
-    ON public.notifications FOR UPDATE TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
--- N. Activities policies
-DROP POLICY IF EXISTS "Allow users to read activities in their clinic" ON public.activities;
-CREATE POLICY "Allow users to read activities in their clinic"
-    ON public.activities FOR SELECT TO authenticated USING (clinic_id = public.get_user_clinic_id());
-
-DROP POLICY IF EXISTS "Allow users to insert activities in their clinic" ON public.activities;
-CREATE POLICY "Allow users to insert activities in their clinic"
-    ON public.activities FOR INSERT TO authenticated WITH CHECK (clinic_id = public.get_user_clinic_id());
+GRANT ALL ON ALL TABLES IN SCHEMA public TO authenticated;
+GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO authenticated;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;

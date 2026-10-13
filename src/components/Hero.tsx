@@ -1,56 +1,72 @@
 "use client";
 
 import Image from "next/image";
+import { Phone, Calendar } from "lucide-react";
 import { getAssetPath } from "@/lib/getAssetPath";
 
 export default function Hero() {
   return (
     <section
       id="home"
-      className="relative w-full min-h-[580px] lg:min-h-[660px] flex items-center pt-28 pb-32 overflow-hidden bg-[#e0f1fe]"
+      className="relative w-full min-h-[580px] lg:min-h-[660px] flex items-center pt-28 pb-32 overflow-hidden bg-[#EAF8FF]"
     >
-      {/* Background Image: Woman smiling with dentist instruments */}
+      {/* Background Image: Woman smiling with dental instruments */}
       <div className="absolute inset-0 z-0">
         <Image
           src={getAssetPath("/hero-bg.png")}
-          alt="Perfect Smile Dental Treatment"
+          alt="32 Smiles Multispeciality Dental Treatment"
           fill
           className="object-cover object-[60%_center] md:object-[75%_center] lg:object-right"
           priority
           unoptimized
         />
-        {/* Soft Blue/Sky Gradient Wash from left to right */}
-        <div className="absolute inset-0 bg-gradient-to-r from-[#d9efff] via-[#e2f2ff]/95 md:via-[#e2f2ff]/85 via-45% to-transparent to-75% pointer-events-none" />
+        {/* Soft Light Blue Gradient Wash from left to right */}
+        <div className="absolute inset-0 bg-gradient-to-r from-[#EAF8FF] via-[#EAF8FF]/95 md:via-[#EAF8FF]/85 via-45% to-transparent to-75% pointer-events-none" />
       </div>
 
-      {/* Hero Content on Left (Positioned approx 80px from left on desktop) */}
+      {/* Hero Content */}
       <div className="max-w-[1360px] mx-auto w-full px-6 md:px-12 lg:px-20 relative z-10">
         <div className="max-w-xl text-left flex flex-col items-start pt-6 sm:pt-10">
           
-          {/* Small Uppercase Label with Blue Underline under "PERFECT" */}
+          {/* Small Uppercase Label with Blue Accent Underline */}
           <div className="mb-4">
-            <span className="relative inline-block text-xs md:text-sm font-bold tracking-[0.18em] text-[#0f2942] uppercase pb-1.5">
-              <span className="relative">
+            <span className="relative inline-block text-xs md:text-sm font-extrabold tracking-[0.18em] text-[#013A8F] uppercase pb-1.5">
+              <span className="relative text-[#01B0FD]">
                 PERFECT
-                <span className="absolute bottom-0 left-0 w-full h-[2.5px] bg-[#0284c7] rounded-full" />
+                <span className="absolute bottom-0 left-0 w-full h-[3px] bg-[#0153AD] rounded-full" />
               </span>
-              <span className="ml-2 font-semibold text-[#1e293b]">SMILE</span>
+              <span className="ml-2 font-bold text-[#013A8F]">SMILE</span>
             </span>
           </div>
 
           {/* Main Headline */}
-          <h1 className="text-4xl sm:text-5xl lg:text-[54px] font-extrabold text-[#0f2942] tracking-tight leading-[1.12] mb-7">
-            Your <span className="text-[#0284c7]">Journey</span> to a perfect<br />
+          <h1 className="text-4xl sm:text-5xl lg:text-[54px] font-extrabold text-[#013A8F] tracking-tight leading-[1.12] mb-5">
+            Your <span className="text-[#01B0FD]">Journey</span> to a perfect<br />
             smile begins with us!
           </h1>
 
-          {/* Blue Gradient Contact Us Button */}
-          <div>
+          {/* Tagline / Subtitle */}
+          <p className="text-slate-600 text-base sm:text-lg mb-8 max-w-lg leading-relaxed font-normal">
+            Welcome to <strong className="text-[#013A8F] font-semibold">32 Smiles Multispeciality Dental Clinic</strong>. Comprehensive multispeciality dental care, gentle treatments, and modern dentistry in Yanam.
+          </p>
+
+          {/* Buttons: Primary Book Appointment (#0153AD) & Contact Us */}
+          <div className="flex flex-wrap items-center gap-4">
             <a
-              href="tel:09885349798"
-              className="inline-flex items-center justify-center px-8 py-3 bg-gradient-to-r from-[#0ea5e9] to-[#0284c7] text-white font-semibold text-sm sm:text-base rounded-lg shadow-md hover:shadow-lg hover:opacity-95 active:scale-95 transition-all duration-200"
+              href="https://calendly.com/32smiles-dental-clinic/30min?month=2026-10&date=2026-10-03"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center gap-2.5 px-8 py-3.5 bg-[#0153AD] hover:bg-[#013A8F] text-white font-bold text-sm sm:text-base rounded-lg shadow-lg hover:shadow-xl hover:scale-[1.02] active:scale-95 transition-all duration-200"
             >
-              Contact Us
+              <Calendar className="w-4 h-4 text-[#47D2FD]" />
+              <span>Book Appointment</span>
+            </a>
+            <a
+              href="tel:08143148485"
+              className="inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-white hover:bg-[#EAF8FF] text-[#013A8F] font-bold text-sm sm:text-base rounded-lg border border-[#D8F2FE] shadow-sm hover:shadow-md transition-all duration-200"
+            >
+              <Phone className="w-4 h-4 text-[#0153AD]" />
+              <span>Contact Us</span>
             </a>
           </div>
 
