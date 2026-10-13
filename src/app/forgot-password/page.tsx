@@ -13,6 +13,7 @@ import { Loader2, AlertCircle, ArrowLeft, MailCheck, Mail } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 import { createClient } from "@/lib/supabase/client";
+import { getAssetPath } from "@/lib/getAssetPath";
 
 const forgotPasswordSchema = z.object({
   email: z.string().min(1, "Email is required").email("Please enter a valid email address"),
@@ -45,8 +46,9 @@ export default function ForgotPasswordPage() {
     setSubmittedEmail(data.email);
     
     try {
+      const resetPath = getAssetPath("/reset-password");
       const { error } = await supabase.auth.resetPasswordForEmail(data.email, {
-        redirectTo: `${window.location.origin}/reset-password`
+        redirectTo: `${window.location.origin}${resetPath}`
       });
 
       if (error) {

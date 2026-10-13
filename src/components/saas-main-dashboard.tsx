@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
@@ -1226,56 +1226,51 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [currentUserName, setCurrentUserName] = useState<string>("");
   const isOwner = userRole === "owner";
   const isReceptionist = userRole === "receptionist";
-  const supabase = createClient();
+  const supabase = useMemo(() => createClient(), []);
+  const isFetchingClinicDataRef = useRef(false);
+  const sessionHandledRef = useRef<string | null>(null);
+  const lastPushedActivityRef = useRef<{ msg: string; time: number } | null>(null);
 
-  const seedMockPatients = async () => {
-    const insertRows = DEFAULT_MOCK_PATIENTS.map(p => ({
-      patient_id: p.id,
+  // Isolated in-memory demo patient loader — isolated from production and NEVER seeded to live Supabase database
+  const loadDemoPatientsInMemory = () => {
+    const demoPatients: Patient[] = DEFAULT_MOCK_PATIENTS.map(p => ({
+      id: p.id,
       name: p.name,
       phone: p.phone,
       age: p.age,
-      gender: p.gender,
+      gender: (p.gender === "Male" || p.gender === "Female") ? p.gender : "Male",
       address: p.address,
       visit: p.visit,
-      medical_notes: p.medicalNotes,
+      medicalNotes: p.medicalNotes,
       balance: p.balance,
-      status: p.status,
-      dental_chart: p.dentalChart,
+      status: (p.status === "Active" || p.status === "Inactive") ? p.status : "Active",
+      dentalChart: p.dentalChart as Record<number, string>,
       prescriptions: p.prescriptions,
       files: p.files,
       notes: p.notes
     }));
-
-    const { error } = await supabase
-      .from("patients")
-      .insert(insertRows);
-
-    if (error) {
-      console.error("Failed to seed mock patients in database:", error.message, error.code);
-    }
+    setPatients(demoPatients);
   };
 
   const fetchClinicData = async () => {
-    // 1. Fetch patients
-    const { data: dbPatients, error: patErr } = await supabase
-      .from("patients")
-      .select("*")
-      .order("created_at", { ascending: false });
+    if (isFetchingClinicDataRef.current) return;
+    isFetchingClinicDataRef.current = true;
 
-    if (patErr) {
-      console.error("Failed to load patients from database:", patErr.message, patErr.code);
-      showToast("Error loading patients from database.", "error");
-      return;
-    }
+    try {
+      // 1. Fetch patients
+      const { data: dbPatients, error: patErr } = await supabase
+        .from("patients")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-    if (dbPatients) {
-      if (dbPatients.length === 0) {
-        await seedMockPatients();
-        // Re-fetch data statefully after insert completion
-        return fetchClinicData();
+      if (patErr) {
+        console.error("Failed to load patients from database:", patErr.message, patErr.code);
+        showToast("Error loading patients from database.", "error");
+        return;
       }
 
-      const mappedPatients: Patient[] = dbPatients.map(p => ({
+      if (dbPatients) {
+        const mappedPatients: Patient[] = dbPatients.map(p => ({
         id: p.patient_id,
         uuid: p.id,
         name: p.name,
@@ -1398,19 +1393,47 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     }
 
     // 6. Fetch activities
-    const { data: dbActivities } = await supabase
-      .from("activities")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(20);
-    if (dbActivities && dbActivities.length > 0) {
-      const mappedAct: ActivityItem[] = dbActivities.map(act => ({
-        id: act.id,
-        type: (act.entity_type as any) || "Register",
-        msg: act.description,
-        time: act.created_at ? convertToUiDate(act.created_at.split("T")[0]) : "Today"
-      }));
-      setActivities(mappedAct);
+    try {
+      const { data: dbActivities, error: actErr } = await supabase
+        .from("activities")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(20);
+
+      if (actErr) {
+        console.warn("Non-fatal: optional activities log fetch notice:", actErr.message);
+      } else if (dbActivities && dbActivities.length > 0) {
+        const mappedAct: ActivityItem[] = dbActivities.map((act: any) => {
+          const titleStr = act.title || act.description || "";
+          let inferredType: ActivityItem["type"] = "Register";
+          if (act.entity_type) {
+            inferredType = act.entity_type;
+          } else if (titleStr.toLowerCase().includes("appoint") || titleStr.toLowerCase().includes("slot") || titleStr.toLowerCase().includes("schedul")) {
+            inferredType = "Appointment";
+          } else if (titleStr.toLowerCase().includes("treat") || titleStr.toLowerCase().includes("consult") || titleStr.toLowerCase().includes("proced")) {
+            inferredType = "Treatment";
+          } else if (titleStr.toLowerCase().includes("bill") || titleStr.toLowerCase().includes("invoice")) {
+            inferredType = "Billing";
+          } else if (titleStr.toLowerCase().includes("pay")) {
+            inferredType = "Payment";
+          } else if (titleStr.toLowerCase().includes("prescr")) {
+            inferredType = "Prescription";
+          } else if (titleStr.toLowerCase().includes("chart")) {
+            inferredType = "Chart";
+          }
+
+          const dateStr = act.created_at || act.timestamp;
+          return {
+            id: act.id,
+            type: inferredType,
+            msg: titleStr || "Activity logged",
+            time: dateStr ? convertToUiDate(dateStr.split("T")[0]) : "Today"
+          };
+        });
+        setActivities(mappedAct);
+      }
+    } catch (err: any) {
+      console.warn("Non-fatal: error loading activities:", err?.message || err);
     }
 
     // 7. Fetch notifications
@@ -1476,8 +1499,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     }
 
     // 10. Fetch medicines inventory & transactions
-    try {
-      const { data: dbMeds, error: medErr } = await supabase
+    const { data: dbMeds, error: medErr } = await supabase
         .from("medicines")
         .select("*")
         .order("name", { ascending: true });
@@ -1538,7 +1560,9 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         })));
       }
     } catch (err) {
-      console.error("Error fetching medicine stock data:", err);
+      console.error("Error fetching clinic data:", err);
+    } finally {
+      isFetchingClinicDataRef.current = false;
     }
   };
 
@@ -1587,12 +1611,25 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   };
 
   useEffect(() => {
+    let isMounted = true;
+
     const handleSessionSuccess = async (session: any) => {
+      if (!isMounted) return;
+      const userId = session?.user?.id;
+      if (!userId) return;
+
+      if (sessionHandledRef.current === userId) {
+        return;
+      }
+      sessionHandledRef.current = userId;
+
       let { data: profile, error: profileErr } = await supabase
         .from("profiles")
         .select("id, role, full_name, status")
-        .eq("id", session.user.id)
+        .eq("id", userId)
         .maybeSingle();
+
+      if (!isMounted) return;
 
       if (profileErr) {
         showToast("Error retrieving user profile.", "error");
@@ -1613,7 +1650,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         const { error: insertProfileErr } = await supabase
           .from("profiles")
           .insert({
-            id: session.user.id,
+            id: userId,
             role: "owner",
             full_name: defaultName,
             status: "Active"
@@ -1624,6 +1661,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           setLoadingSession(false);
           return;
         }
+        if (!isMounted) return;
         setUserRole("owner");
         setCurrentUserName(defaultName);
       } else {
@@ -1634,11 +1672,14 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       }
 
       await fetchClinicData();
-      setLoadingSession(false);
+      if (isMounted) {
+        setLoadingSession(false);
+      }
     };
 
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
+      if (!isMounted) return;
       if (!session) {
         router.push("/login");
       } else {
@@ -1649,7 +1690,9 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     checkSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!isMounted) return;
       if (!session) {
+        sessionHandledRef.current = null;
         router.push("/login");
       } else {
         await handleSessionSuccess(session);
@@ -1657,11 +1700,13 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     });
 
     return () => {
+      isMounted = false;
       subscription.unsubscribe();
     };
   }, [router, supabase]);
 
   const handleLogout = async () => {
+    sessionHandledRef.current = null;
     await supabase.auth.signOut();
     router.push("/login");
   };
@@ -4494,8 +4539,19 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   };
 
   const pushActivity = async (type: ActivityItem["type"], msg: string) => {
+    const now = Date.now();
+    // Prevent duplicate rapid triggers or re-renders
+    if (
+      lastPushedActivityRef.current &&
+      lastPushedActivityRef.current.msg === msg &&
+      now - lastPushedActivityRef.current.time < 1500
+    ) {
+      return;
+    }
+    lastPushedActivityRef.current = { msg, time: now };
+
     const newAct: ActivityItem = {
-      id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+      id: `act-${now}-${Math.random().toString(36).substring(2, 9)}`,
       type,
       msg,
       time: "Just now"
@@ -4504,13 +4560,19 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      await supabase.from("activities").insert({
-        user_id: session?.user?.id || null,
-        action: type,
-        entity_type: type,
-        description: msg
+      const userName = currentUserName || session?.user?.user_metadata?.full_name || session?.user?.email?.split("@")[0] || "Staff";
+
+      const { error: insertErr } = await supabase.from("activities").insert({
+        title: msg,
+        user_name: userName
       });
-    } catch (e) {}
+
+      if (insertErr) {
+        console.warn("Non-fatal: optional activity logging failed:", insertErr.message, insertErr.code);
+      }
+    } catch (err: any) {
+      console.warn("Non-fatal: error in activity logging routine:", err?.message || err);
+    }
   };
 
   // --- WORKFLOW EVENT HANDLERS ---

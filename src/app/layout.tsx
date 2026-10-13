@@ -15,11 +15,7 @@ const poppins = Poppins({
   weight: ["600", "700"],
 });
 
-const defaultBasePath = "";
-
-const basePath = process.env.NEXT_PUBLIC_BASE_PATH !== undefined
-  ? process.env.NEXT_PUBLIC_BASE_PATH
-  : defaultBasePath;
+import { getAssetPath } from "@/lib/getAssetPath";
 
 export const metadata: Metadata = {
   title: "32 Smiles Multispeciality Dental Clinic | Advanced Dental Care & Implant Centre",
@@ -40,16 +36,16 @@ export const metadata: Metadata = {
   ],
   icons: {
     icon: [
-      { url: `${basePath}/favicon.ico`, sizes: "any" },
-      { url: `${basePath}/favicon-16x16.png`, sizes: "16x16", type: "image/png" },
-      { url: `${basePath}/favicon-32x32.png`, sizes: "32x32", type: "image/png" },
-      { url: `${basePath}/favicon-48x48.png`, sizes: "48x48", type: "image/png" },
+      { url: getAssetPath("/favicon.ico"), sizes: "any" },
+      { url: getAssetPath("/favicon-16x16.png"), sizes: "16x16", type: "image/png" },
+      { url: getAssetPath("/favicon-32x32.png"), sizes: "32x32", type: "image/png" },
+      { url: getAssetPath("/favicon-48x48.png"), sizes: "48x48", type: "image/png" },
     ],
     apple: [
-      { url: `${basePath}/apple-touch-icon.png`, sizes: "180x180", type: "image/png" },
+      { url: getAssetPath("/apple-touch-icon.png"), sizes: "180x180", type: "image/png" },
     ],
   },
-  manifest: `${basePath}/manifest.webmanifest`,
+  manifest: getAssetPath("/manifest.webmanifest"),
 };
 
 export default function RootLayout({

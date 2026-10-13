@@ -6,8 +6,13 @@ export async function proxy(request: NextRequest) {
     request,
   })
 
-  const urlEnv = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co'
-  const keyEnv = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || 'placeholder'
+  const defaultUrl = 'https://gjxpellqcgxlicbylbhe.supabase.co'
+  const urlEnv = process.env.NEXT_PUBLIC_SUPABASE_URL || defaultUrl
+  const keyEnv = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
+  if (!urlEnv || urlEnv.includes('placeholder.supabase.co') || !keyEnv || keyEnv === 'placeholder') {
+    return supabaseResponse
+  }
 
   const supabase = createServerClient(
     urlEnv,
