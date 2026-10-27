@@ -94,6 +94,7 @@ import {
   MEDICINE_CATEGORIES,
   MedicineCategory,
   getCategoryForMedicine,
+  getFormulationForMedicine,
   isOldMockMedicine,
 } from "@/lib/medicineCatalogue";
 import {
@@ -128,6 +129,8 @@ export interface MedicineItem {
   category?: string;
   dosage_form?: string;
   stock_unit: string;
+  formulation?: string;
+  description?: string;
   opening_stock: number | null;
   available_quantity: number | null;
   low_stock_threshold: number;
@@ -1161,6 +1164,7 @@ const DEFAULT_MOCK_MEDICINES: MedicineItem[] = INITIAL_MEDICINES_CATALOGUE.map((
   category: item.category,
   dosage_form: item.dosage_form,
   stock_unit: item.stock_unit,
+  formulation: item.formulation,
   opening_stock: null,
   available_quantity: null,
   low_stock_threshold: 5,
@@ -1598,6 +1602,15 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
     // 10. Fetch medicines catalogue & transactions
     try {
+      const storedDeleted = (() => {
+        try {
+          const raw = typeof window !== "undefined" ? localStorage.getItem("32smiles_deleted_medicines") : null;
+          return raw ? new Set(JSON.parse(raw).map((s: string) => s.toLowerCase())) : new Set<string>();
+        } catch {
+          return new Set<string>();
+        }
+      })();
+
       const { data: dbMeds, error: medErr } = await supabase
         .from("medicines")
         .select("*")
@@ -1605,13 +1618,14 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
       if (!medErr && dbMeds) {
         const sanitizedDbMeds: MedicineItem[] = dbMeds
-          .filter((m: any) => !isOldMockMedicine(m.name))
+          .filter((m: any) => !isOldMockMedicine(m.name) && m.is_active !== false && !storedDeleted.has(m.name.toLowerCase()))
           .map((m: any) => ({
             id: m.id,
             name: m.name,
             category: m.category || getCategoryForMedicine(m.name),
             dosage_form: m.dosage_form || (INITIAL_MEDICINES_CATALOGUE.find(c => c.name.toLowerCase() === m.name.toLowerCase())?.dosage_form || "Tablet"),
             stock_unit: m.stock_unit || "tablets",
+            formulation: m.formulation || getFormulationForMedicine(m.name),
             opening_stock: m.opening_stock !== null ? Number(m.opening_stock) : null,
             available_quantity: m.available_quantity !== null ? Number(m.available_quantity) : null,
             low_stock_threshold: Number(m.low_stock_threshold || 5),
@@ -1621,13 +1635,16 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
             updated_at: m.updated_at
           }));
 
-        // Merge initial 35 catalogue entries so none are missing if DB is unseeded or partially seeded
+        // Merge initial 12 catalogue entries so none are missing if DB is unseeded or partially seeded
         const dbNamesLower = new Set(sanitizedDbMeds.map(m => m.name.toLowerCase()));
         const missingInitial = DEFAULT_MOCK_MEDICINES.filter(
-          initMed => !dbNamesLower.has(initMed.name.toLowerCase())
+          initMed => !dbNamesLower.has(initMed.name.toLowerCase()) && !storedDeleted.has(initMed.name.toLowerCase())
         );
 
         setMedicines([...sanitizedDbMeds, ...missingInitial]);
+      } else {
+        // Fallback to initial 12 medicines if DB unreachable or empty
+        setMedicines(DEFAULT_MOCK_MEDICINES.filter(m => !storedDeleted.has(m.name.toLowerCase())));
       }
 
       const { data: dbTx, error: txErr } = await supabase
@@ -1871,6 +1888,8 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   // Medicine Add / Edit Modal State
   const [medicineModalOpen, setMedicineModalOpen] = useState(false);
   const [editingMedicine, setEditingMedicine] = useState<MedicineItem | null>(null);
+  const [deleteMedicineConfirm, setDeleteMedicineConfirm] = useState<MedicineItem | null>(null);
+  const [isDeletingMedicine, setIsDeletingMedicine] = useState(false);
   const [medFormName, setMedFormName] = useState("");
   const [medFormCategory, setMedFormCategory] = useState<string>("Tablets / Capsules");
   const [medFormDosageForm, setMedFormDosageForm] = useState<string>("Tablet");
@@ -5065,6 +5084,84 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     }
 
     setMedicineModalOpen(false);
+  };
+
+  const handleOpenDeleteMedicine = (med: MedicineItem) => {
+    if (!isOwner) {
+      showToast("Unauthorized: Only clinic owners can delete catalogue medicines.", "error");
+      return;
+    }
+    setDeleteMedicineConfirm(med);
+  };
+
+  const handleConfirmDeleteMedicine = async () => {
+    if (!deleteMedicineConfirm || isDeletingMedicine) return;
+    if (!isOwner) {
+      showToast("Unauthorized: Only clinic owners can delete catalogue medicines.", "error");
+      setDeleteMedicineConfirm(null);
+      return;
+    }
+
+    const targetMed = deleteMedicineConfirm;
+    setIsDeletingMedicine(true);
+
+    try {
+      // 1. Check if the medicine has been used in stock transactions
+      const hasTransactions = stockTransactions.some(
+        (tx) => tx.medicine_id === targetMed.id || tx.medicine_name?.toLowerCase() === targetMed.name.toLowerCase()
+      );
+
+      // 2. Check if the medicine has been used in patient prescriptions
+      const hasPrescriptions = patientPrescriptionsList.some((pr) =>
+        pr.items?.some((it) => it.medicine_name?.toLowerCase() === targetMed.name.toLowerCase())
+      ) || patients.some((p) =>
+        p.prescriptions?.some((pStr) => pStr.toLowerCase().includes(targetMed.name.toLowerCase()))
+      );
+
+      // Safe deletion strategy:
+      // If referenced in transactions or prescriptions, mark is_active = false in DB to preserve historical FKs & clinical integrity.
+      // If unreferenced, delete the row from DB with fallback to soft-delete if DB has constraints.
+      if (hasTransactions || hasPrescriptions) {
+        await supabase
+          .from("medicines")
+          .update({ is_active: false })
+          .eq("id", targetMed.id);
+      } else {
+        const { error: delErr } = await supabase
+          .from("medicines")
+          .delete()
+          .eq("id", targetMed.id);
+
+        if (delErr) {
+          console.warn("Delete fallback to soft-delete:", delErr.message);
+          await supabase
+            .from("medicines")
+            .update({ is_active: false })
+            .eq("id", targetMed.id);
+        }
+      }
+
+      // Persist deletion in local blacklist so it is never re-seeded on page reloads
+      try {
+        const raw = localStorage.getItem("32smiles_deleted_medicines");
+        const list = raw ? JSON.parse(raw) : [];
+        if (!list.includes(targetMed.name.toLowerCase())) {
+          list.push(targetMed.name.toLowerCase());
+          localStorage.setItem("32smiles_deleted_medicines", JSON.stringify(list));
+        }
+      } catch (_) {}
+
+      // Immediately remove from active catalogue state
+      setMedicines((prev) => prev.filter((m) => m.id !== targetMed.id && m.name.toLowerCase() !== targetMed.name.toLowerCase()));
+
+      showToast(`Medicine "${targetMed.name}" deleted from catalogue.`, "success");
+      setDeleteMedicineConfirm(null);
+    } catch (err: any) {
+      console.error("Error deleting medicine:", err);
+      showToast(`Failed to delete medicine: ${err.message || "Unknown error"}`, "error");
+    } finally {
+      setIsDeletingMedicine(false);
+    }
   };
 
   const handleOpenAddStock = (med: MedicineItem) => {
@@ -15888,8 +15985,15 @@ ${clinicName}`;
                           const form = m.dosage_form || m.stock_unit;
                           return (
                             <tr key={m.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/40">
-                              <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
-                                {m.name}
+                              <td className="py-3 px-4">
+                                <div className="font-bold text-slate-900 dark:text-white">
+                                  {m.name}
+                                </div>
+                                {(m.formulation || m.description) && (
+                                  <div className="text-[11px] text-slate-500 dark:text-slate-400 font-normal mt-0.5">
+                                    {m.formulation || m.description}
+                                  </div>
+                                )}
                               </td>
                               <td className="py-3 px-4">
                                 <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
@@ -15917,8 +16021,18 @@ ${clinicName}`;
                                     onClick={() => handleOpenEditMedicine(m)}
                                     className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg transition-colors cursor-pointer"
                                     title="Edit Medicine Details"
+                                    aria-label={`Edit ${m.name}`}
                                   >
                                     <Pencil className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenDeleteMedicine(m)}
+                                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
+                                    title="Delete Medicine from Catalogue"
+                                    aria-label={`Delete ${m.name}`}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
                                   </button>
                                 </div>
                               </td>
@@ -18949,6 +19063,72 @@ ${clinicName}`;
                 </Button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE MEDICINE CONFIRMATION MODAL */}
+      {deleteMedicineConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+          <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl w-full max-w-sm p-6 space-y-4 text-center animate-scaleIn">
+            <div className="h-12 w-12 rounded-full bg-red-100 dark:bg-red-955/50 text-red-600 flex items-center justify-center mx-auto">
+              <Trash2 className="h-6 w-6" />
+            </div>
+            <div>
+              <h3 className="text-[16px] font-bold text-slate-900 dark:text-white">Delete Medicine?</h3>
+              <p className="text-[13px] text-slate-700 dark:text-slate-300 mt-2 font-medium">
+                Are you sure you want to delete this medicine from the catalogue?
+              </p>
+              <div className="mt-3 p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-800 text-left">
+                <div className="text-[13px] font-bold text-slate-900 dark:text-white">
+                  {deleteMedicineConfirm.name}
+                </div>
+                {(deleteMedicineConfirm.formulation || deleteMedicineConfirm.description) && (
+                  <div className="text-[12px] text-slate-500 dark:text-slate-400 mt-0.5">
+                    {deleteMedicineConfirm.formulation || deleteMedicineConfirm.description}
+                  </div>
+                )}
+                <div className="mt-1.5 flex items-center gap-2 text-[11px] text-slate-500">
+                  <span className="font-semibold text-blue-600 dark:text-blue-400">
+                    {deleteMedicineConfirm.category || getCategoryForMedicine(deleteMedicineConfirm.name)}
+                  </span>
+                  <span>•</span>
+                  <span>{deleteMedicineConfirm.dosage_form || deleteMedicineConfirm.stock_unit}</span>
+                </div>
+              </div>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 mt-2.5">
+                Historical prescriptions and clinical records referencing this medicine will remain intact.
+              </p>
+            </div>
+            <div className="flex justify-center gap-3 pt-2">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isDeletingMedicine}
+                onClick={() => setDeleteMedicineConfirm(null)}
+                className="h-10 px-4 text-xs font-semibold cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                disabled={isDeletingMedicine}
+                onClick={handleConfirmDeleteMedicine}
+                className="bg-red-600 hover:bg-red-500 text-white font-bold h-10 px-5 text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingMedicine ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Deleting...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    <span>Delete</span>
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
         </div>
       )}
