@@ -5,6 +5,11 @@ import { Calendar, Clock, User, Phone, Mail, Stethoscope, FileText, CheckCircle2
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  getTodayKolkataDbDate,
+  isSlotInThePast,
+  getNextAvailableAppointmentSlot,
+} from "@/lib/dateTimeUtils";
 
 interface DoctorOption {
   id: string;
@@ -12,16 +17,28 @@ interface DoctorOption {
   speciality: string;
 }
 
+const PUBLIC_APPT_SLOTS = [
+  "09:00 AM",
+  "10:00 AM",
+  "11:30 AM",
+  "02:00 PM",
+  "04:30 PM",
+  "06:00 PM",
+];
+
 export function PublicAppointmentForm({ className = "" }: { className?: string }) {
   const [doctors, setDoctors] = useState<DoctorOption[]>([]);
   const [loadingDoctors, setLoadingDoctors] = useState(true);
+
+  const todayDb = getTodayKolkataDbDate();
+  const defaultSlot = getNextAvailableAppointmentSlot(todayDb, PUBLIC_APPT_SLOTS);
 
   const [formData, setFormData] = useState({
     name: "",
     phone: "",
     email: "",
-    date: "",
-    time: "09:00 AM",
+    date: todayDb,
+    time: defaultSlot,
     doctorId: "",
     treatment: "General Consultation",
     notes: ""
@@ -56,7 +73,15 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+    setFormData(prev => {
+      const next = { ...prev, [name]: value };
+      if (name === "date") {
+        if (isSlotInThePast(prev.time, value)) {
+          next.time = getNextAvailableAppointmentSlot(value, PUBLIC_APPT_SLOTS);
+        }
+      }
+      return next;
+    });
     if (errorMessage) setErrorMessage(null);
   };
 
@@ -81,6 +106,11 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
       return;
     }
 
+    if (isSlotInThePast(formData.time, formData.date)) {
+      setErrorMessage("The selected time slot has already passed for today. Please choose an upcoming time slot.");
+      return;
+    }
+
     setSubmitting(true);
 
     try {
@@ -100,15 +130,17 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
         })
       });
 
-      const json = await res.json();
+      const data = await res.json();
 
-      if (!res.ok || !json.success) {
-        setErrorMessage(json.error || "Unable to submit appointment request. Please check your inputs.");
-      } else {
-        setSuccessMessage(json.message || "Your appointment request has been received. Our clinic will contact you to confirm your appointment.");
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Failed to submit appointment request.");
       }
-    } catch (err) {
-      setErrorMessage("Network error occurred. Please check your connection and try again.");
+
+      setSuccessMessage(
+        data.message || `Appointment request submitted! Your confirmation ID is ${data.appointmentId || "confirmed"}. Our team will contact you shortly.`
+      );
+    } catch (err: any) {
+      setErrorMessage(err.message || "Something went wrong while submitting. Please call our clinic directly.");
     } finally {
       setSubmitting(false);
     }
@@ -117,12 +149,13 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
   const handleReset = () => {
     setSuccessMessage(null);
     setErrorMessage(null);
+    const resetDate = getTodayKolkataDbDate();
     setFormData({
       name: "",
       phone: "",
       email: "",
-      date: "",
-      time: "09:00 AM",
+      date: resetDate,
+      time: getNextAvailableAppointmentSlot(resetDate, PUBLIC_APPT_SLOTS),
       doctorId: "",
       treatment: "General Consultation",
       notes: ""
@@ -131,16 +164,14 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
 
   if (successMessage) {
     return (
-      <div className={`p-6 sm:p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl max-w-lg mx-auto text-center space-y-5 ${className}`}>
-        <div className="h-16 w-16 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto border border-emerald-100 dark:border-emerald-900/40">
-          <CheckCircle2 className="h-9 w-9 animate-bounce" />
+      <div className={`p-6 sm:p-8 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-xl max-w-xl mx-auto space-y-4 text-center ${className}`}>
+        <div className="mx-auto w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 flex items-center justify-center text-emerald-600 dark:text-emerald-400">
+          <CheckCircle2 className="h-6 w-6" />
         </div>
-        <div className="space-y-2">
-          <h3 className="text-xl font-bold text-slate-900 dark:text-white">Request Received</h3>
-          <p className="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
-            {successMessage}
-          </p>
-        </div>
+        <h3 className="text-lg font-bold text-slate-900 dark:text-white">Request Received!</h3>
+        <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+          {successMessage}
+        </p>
         <div className="pt-2">
           <Button
             onClick={handleReset}
@@ -165,13 +196,13 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
       </div>
 
       {errorMessage && (
-        <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/40 flex items-start gap-2.5 text-xs text-red-700 dark:text-red-300 font-medium">
-          <AlertCircle className="h-4 w-4 shrink-0 text-red-600 mt-0.5" />
+        <div className="p-3.5 rounded-xl bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 flex items-start gap-2.5 text-xs text-red-700 dark:text-red-300">
+          <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
           <span>{errorMessage}</span>
         </div>
       )}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-4 text-xs font-medium">
         {/* Full Name */}
         <div className="space-y-1.5">
           <Label htmlFor="public-name" className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
@@ -180,16 +211,15 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
           <Input
             id="public-name"
             name="name"
-            type="text"
             required
-            placeholder="e.g. Ananya Sharma"
+            placeholder="e.g. Ramesh Kumar"
             value={formData.name}
             onChange={handleChange}
             className="h-10 rounded-xl bg-slate-50/50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-xs"
           />
         </div>
 
-        {/* Phone & Email Row */}
+        {/* Mobile & Email Row */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <Label htmlFor="public-phone" className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
@@ -200,7 +230,7 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
               name="phone"
               type="tel"
               required
-              placeholder="e.g. 9811209230"
+              placeholder="e.g. 9876543210"
               value={formData.phone}
               onChange={handleChange}
               className="h-10 rounded-xl bg-slate-50/50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-xs"
@@ -209,13 +239,13 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
 
           <div className="space-y-1.5">
             <Label htmlFor="public-email" className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-              <Mail className="h-3.5 w-3.5 text-slate-400" /> Email Address
+              <Mail className="h-3.5 w-3.5 text-slate-400" /> Email Address (Optional)
             </Label>
             <Input
               id="public-email"
               name="email"
               type="email"
-              placeholder="e.g. patient@example.com"
+              placeholder="e.g. name@example.com"
               value={formData.email}
               onChange={handleChange}
               className="h-10 rounded-xl bg-slate-50/50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-xs"
@@ -234,7 +264,7 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
               name="date"
               type="date"
               required
-              min={new Date().toISOString().split("T")[0]}
+              min={todayDb}
               value={formData.date}
               onChange={handleChange}
               className="h-10 rounded-xl bg-slate-50/50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-xs"
@@ -252,12 +282,14 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
               onChange={handleChange}
               className="h-10 w-full rounded-xl bg-slate-50/50 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="09:00 AM">09:00 AM</option>
-              <option value="10:00 AM">10:00 AM</option>
-              <option value="11:30 AM">11:30 AM</option>
-              <option value="02:00 PM">02:00 PM</option>
-              <option value="04:30 PM">04:30 PM</option>
-              <option value="06:00 PM">06:00 PM</option>
+              {PUBLIC_APPT_SLOTS.map((slot) => {
+                const past = isSlotInThePast(slot, formData.date);
+                return (
+                  <option key={slot} value={slot} disabled={past}>
+                    {slot}{past ? " (Past)" : ""}
+                  </option>
+                );
+              })}
             </select>
           </div>
         </div>
@@ -286,8 +318,8 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="public-treatment" className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
-              <FileText className="h-3.5 w-3.5 text-slate-400" /> Reason / Treatment
+            <Label htmlFor="public-treatment" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+              Service / Treatment
             </Label>
             <select
               id="public-treatment"
@@ -299,18 +331,20 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
               <option value="General Consultation">General Consultation</option>
               <option value="Dental Scaling / Cleaning">Dental Scaling / Cleaning</option>
               <option value="Root Canal Treatment">Root Canal Treatment</option>
-              <option value="Tooth Extraction">Tooth Extraction</option>
+              <option value="Dental Implants">Dental Implants</option>
               <option value="Teeth Whitening">Teeth Whitening</option>
-              <option value="Orthodontic Braces Check">Orthodontic Braces Check</option>
-              <option value="Dental Implant Consultation">Dental Implant Consultation</option>
+              <option value="Orthodontic Braces / Aligners">Orthodontic Braces / Aligners</option>
+              <option value="Tooth Extraction">Tooth Extraction</option>
+              <option value="Crowns & Bridges">Crowns & Bridges</option>
+              <option value="Emergency Toothache Care">Emergency Toothache Care</option>
             </select>
           </div>
         </div>
 
-        {/* Additional Notes */}
+        {/* Notes / Reason */}
         <div className="space-y-1.5">
-          <Label htmlFor="public-notes" className="text-xs font-semibold text-slate-700 dark:text-slate-300">
-            Additional Notes / Symptoms
+          <Label htmlFor="public-notes" className="text-xs font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-1.5">
+            <FileText className="h-3.5 w-3.5 text-slate-400" /> Additional Notes / Symptoms
           </Label>
           <textarea
             id="public-notes"
@@ -334,7 +368,7 @@ export function PublicAppointmentForm({ className = "" }: { className?: string }
               <Loader2 className="h-4 w-4 animate-spin" /> Submitting Request...
             </>
           ) : (
-            "Request Appointment"
+            "Request Appointment Confirmation"
           )}
         </Button>
       </form>

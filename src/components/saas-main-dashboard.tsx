@@ -70,7 +70,8 @@ import {
   Pill,
   Package,
   Boxes,
-  AlertTriangle
+  AlertTriangle,
+  Eye
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -79,11 +80,53 @@ import { DentalLogo } from "@/components/dental-logo";
 import { createClient } from "@/lib/supabase/client";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import { CaseSheetPrintTemplate, getCaseSheetTotalPages } from "@/components/print/CaseSheetPrintTemplate";
+import { PrescriptionPrintTemplate } from "@/components/print/PrescriptionPrintTemplate";
+import { ResponsivePdfPreview } from "@/components/print/ResponsivePdfPreview";
+import { generateAndDownloadPrescriptionPdf } from "@/lib/prescriptionPdfGenerator";
+import { VRDentalInvoicePrintTemplate } from "@/components/print/VRDentalInvoicePrintTemplate";
+import { generateAndDownloadInvoicePdf } from "@/lib/invoicePdfGenerator";
+import { generateAndDownloadCaseSheetPdf } from "@/lib/caseSheetPdfGenerator";
+import { getAssetPath } from "@/lib/getAssetPath";
+import { MedicineCategorySelector } from "@/components/prescription/MedicineCategorySelector";
+import {
+  INITIAL_MEDICINES_CATALOGUE,
+  MEDICINE_CATEGORIES,
+  MedicineCategory,
+  getCategoryForMedicine,
+  isOldMockMedicine,
+} from "@/lib/medicineCatalogue";
+import {
+  TREATMENT_CATEGORIES,
+  TreatmentCategoryDef,
+  TREATMENT_COLOR_PALETTES,
+  ColorPaletteOption,
+  getColorPaletteByKey,
+  setDynamicCatalogue,
+  findCategory,
+  parseTreatmentEntry,
+  buildTreatmentEntryString,
+} from "@/lib/treatmentCatalogue";
+import { SubTreatmentModal } from "@/components/treatment/SubTreatmentSelector";
+import {
+  getTodayKolkataDbDate,
+  getTodayKolkataUiDate,
+  formatDbDateToUi,
+  formatUiDateToDb,
+  formatTimestampToKolkataUi,
+  getNextAvailableAppointmentSlot,
+  getPast15DaysKolkata,
+  getCurrentMonthRangeKolkata,
+  isSlotInThePast,
+  STANDARD_CLINIC_SLOTS,
+} from "@/lib/dateTimeUtils";
 
 // Interfaces
 export interface MedicineItem {
   id: string;
   name: string;
+  category?: string;
+  dosage_form?: string;
   stock_unit: string;
   opening_stock: number | null;
   available_quantity: number | null;
@@ -139,6 +182,13 @@ interface FileAttachment {
   name: string;
   size: string;
   type: string;
+  id?: string;
+  original_name?: string;
+  storage_path?: string;
+  category?: string;
+  file_size?: number;
+  uploaded_by?: string;
+  created_at?: string;
 }
 
 interface Patient {
@@ -195,6 +245,14 @@ interface Appointment {
   avatarColor: string;
 }
 
+interface MultiTreatmentRow {
+  id: string;
+  description: string;
+  quantity: number | string;
+  unitPrice: number | string;
+  amount: number;
+}
+
 interface InvoiceItem {
   id: string;
   uuid?: string;
@@ -202,7 +260,12 @@ interface InvoiceItem {
   patientName: string;
   doctor: string;
   treatment: string;
-  items: { description: string; amount: number }[];
+  items: {
+    description: string;
+    amount: number;
+    quantity?: number;
+    unitPrice?: number;
+  }[];
   discount: number; // in percentage
   discountType?: "percentage" | "fixed";
   discountValue?: number;
@@ -393,6 +456,12 @@ export const TREATMENT_COLORS: Record<string, TreatmentColorConfig> = {
     badgeBg: "bg-orange-50 border-orange-200 text-orange-800 dark:bg-orange-950/40 dark:border-orange-800 dark:text-orange-300",
     toothFillClass: "fill-orange-200/90 dark:fill-orange-900/60 stroke-orange-600 stroke-[1.5]"
   },
+  "Extractions": {
+    name: "Extractions",
+    dotColor: "bg-orange-500 border-orange-600",
+    badgeBg: "bg-orange-50 border-orange-200 text-orange-800 dark:bg-orange-950/40 dark:border-orange-800 dark:text-orange-300",
+    toothFillClass: "fill-orange-200/90 dark:fill-orange-900/60 stroke-orange-600 stroke-[1.5]"
+  },
   "Filling": {
     name: "Filling",
     dotColor: "bg-purple-500 border-purple-600",
@@ -405,8 +474,20 @@ export const TREATMENT_COLORS: Record<string, TreatmentColorConfig> = {
     badgeBg: "bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300",
     toothFillClass: "fill-rose-200/90 dark:fill-rose-900/60 stroke-rose-600 stroke-[1.5]"
   },
+  "Crowns": {
+    name: "Crowns",
+    dotColor: "bg-rose-500 border-rose-600",
+    badgeBg: "bg-rose-50 border-rose-200 text-rose-800 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300",
+    toothFillClass: "fill-rose-200/90 dark:fill-rose-900/60 stroke-rose-600 stroke-[1.5]"
+  },
   "Implant": {
     name: "Implant",
+    dotColor: "bg-cyan-500 border-cyan-600",
+    badgeBg: "bg-cyan-50 border-cyan-200 text-cyan-800 dark:bg-cyan-950/40 dark:border-cyan-800 dark:text-cyan-300",
+    toothFillClass: "fill-cyan-200/90 dark:fill-cyan-900/60 stroke-cyan-600 stroke-[1.5]"
+  },
+  "Implants": {
+    name: "Implants",
     dotColor: "bg-cyan-500 border-cyan-600",
     badgeBg: "bg-cyan-50 border-cyan-200 text-cyan-800 dark:bg-cyan-950/40 dark:border-cyan-800 dark:text-cyan-300",
     toothFillClass: "fill-cyan-200/90 dark:fill-cyan-900/60 stroke-cyan-600 stroke-[1.5]"
@@ -416,6 +497,24 @@ export const TREATMENT_COLORS: Record<string, TreatmentColorConfig> = {
     dotColor: "bg-fuchsia-500 border-fuchsia-600",
     badgeBg: "bg-fuchsia-50 border-fuchsia-200 text-fuchsia-800 dark:bg-fuchsia-950/40 dark:border-fuchsia-800 dark:text-fuchsia-300",
     toothFillClass: "fill-fuchsia-200/90 dark:fill-fuchsia-900/60 stroke-fuchsia-600 stroke-[1.5]"
+  },
+  "Orthodontic Treatments": {
+    name: "Orthodontic Treatments",
+    dotColor: "bg-fuchsia-500 border-fuchsia-600",
+    badgeBg: "bg-fuchsia-50 border-fuchsia-200 text-fuchsia-800 dark:bg-fuchsia-950/40 dark:border-fuchsia-800 dark:text-fuchsia-300",
+    toothFillClass: "fill-fuchsia-200/90 dark:fill-fuchsia-900/60 stroke-fuchsia-600 stroke-[1.5]"
+  },
+  "Prosthodontic Treatments": {
+    name: "Prosthodontic Treatments",
+    dotColor: "bg-indigo-500 border-indigo-600",
+    badgeBg: "bg-indigo-50 border-indigo-200 text-indigo-800 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300",
+    toothFillClass: "fill-indigo-200/90 dark:fill-indigo-900/60 stroke-indigo-600 stroke-[1.5]"
+  },
+  "Pediatric Dentistry": {
+    name: "Pediatric Dentistry",
+    dotColor: "bg-amber-500 border-amber-600",
+    badgeBg: "bg-amber-50 border-amber-200 text-amber-800 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300",
+    toothFillClass: "fill-amber-200/90 dark:fill-amber-900/60 stroke-amber-600 stroke-[1.5]"
   },
   "Consultation": {
     name: "Consultation",
@@ -427,20 +526,43 @@ export const TREATMENT_COLORS: Record<string, TreatmentColorConfig> = {
 
 export function getTreatmentColorConfig(statusStr?: string): TreatmentColorConfig | null {
   if (!statusStr || statusStr === "Healthy") return null;
-  const mainName = statusStr.split(" (")[0].trim();
+  const parsed = parseTreatmentEntry(statusStr);
 
+  if (TREATMENT_COLORS[parsed.colorKey]) {
+    return TREATMENT_COLORS[parsed.colorKey];
+  }
+  if (TREATMENT_COLORS[parsed.category]) {
+    return TREATMENT_COLORS[parsed.category];
+  }
+
+  const catDef = findCategory(parsed.category) || findCategory(parsed.raw);
+  if (catDef) {
+    if (catDef.colorDot && catDef.colorTooth) {
+      return {
+        name: catDef.name,
+        dotColor: catDef.colorDot,
+        badgeBg: catDef.colorBadge || "bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/40 dark:border-blue-800 dark:text-blue-300",
+        toothFillClass: catDef.colorTooth
+      };
+    }
+    if (TREATMENT_COLORS[catDef.colorKey]) {
+      return TREATMENT_COLORS[catDef.colorKey];
+    }
+  }
+
+  const mainName = statusStr.split(" (")[0].trim();
   if (TREATMENT_COLORS[mainName]) {
     return TREATMENT_COLORS[mainName];
   }
 
   for (const [key, config] of Object.entries(TREATMENT_COLORS)) {
-    if (mainName.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(mainName.toLowerCase())) {
+    if (parsed.raw.toLowerCase().includes(key.toLowerCase()) || key.toLowerCase().includes(parsed.raw.toLowerCase())) {
       return config;
     }
   }
 
   return {
-    name: mainName,
+    name: parsed.category || mainName,
     dotColor: "bg-blue-500 border-blue-600",
     badgeBg: "bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-950/40 dark:border-blue-800 dark:text-blue-300",
     toothFillClass: "fill-blue-200/90 dark:fill-blue-900/60 stroke-blue-600 stroke-[1.5]"
@@ -735,14 +857,14 @@ export function formatTreatmentAdvisedFromChart(dentalChart: Record<number, stri
     const treatmentList = parseToothTreatments(val);
 
     treatmentList.forEach(statusStr => {
-      const colorConfig = getTreatmentColorConfig(statusStr);
-      const procedure = colorConfig?.name || statusStr.split(" (")[0].replace(/\s*\([^)]*\)/g, "").trim();
-      if (!procedure) return;
+      const parsed = parseTreatmentEntry(statusStr);
+      const displayProc = parsed.subTreatment ? `${parsed.category} — ${parsed.subTreatment}` : parsed.category;
+      if (!displayProc) return;
 
-      const procKey = procedure.toLowerCase();
+      const procKey = displayProc.toLowerCase();
       if (!procedureMap[procKey]) {
         procedureMap[procKey] = {
-          displayProc: procedure,
+          displayProc,
           teeth: []
         };
       }
@@ -897,17 +1019,8 @@ const Odontogram: React.FC<OdontogramProps> = ({
   );
 };
 
-// Common treatment names
-const COMMON_TREATMENTS: string[] = [
-  "Consultation",
-  "Scaling",
-  "Root Canal",
-  "Extraction",
-  "Filling",
-  "Implant",
-  "Crown",
-  "Braces"
-];
+// Predefined treatment procedure names (derived from shared catalogue)
+const ALL_TREATMENTS: string[] = TREATMENT_CATEGORIES.map(c => c.name);
 
 const menuItems = [
   { name: "Dashboard", icon: <Home className="h-[22px] w-[22px] shrink-0" strokeWidth={2} />, badge: null },
@@ -925,8 +1038,8 @@ const moduleSubTabs: Record<string, string[]> = {
   Patients: ["All Patients", "Add Patient"],
   Treatments: ["Active Treatments", "Completed", "Treatment Plans"],
   Billing: ["Invoices", "Payments"],
-  Reports: ["Revenue", "Patients", "Treatments", "Appointments", "Medicine Stock"],
-  Settings: ["Clinic", "Doctors", "Staff", "Stock / Medicine", "Backup"]
+  Reports: ["Revenue", "Patients", "Treatments", "Appointments"],
+  Settings: ["Clinic", "Doctors", "Staff", "Stock / Medicine", "Treatments", "Backup"]
 };
 
 interface ClinicalMedia {
@@ -951,7 +1064,7 @@ const parseClinicalNote = (noteStr: string) => {
     const category = parts[1]?.replace("Category: ", "") || "General";
     const author = parts[2]?.replace("Author: ", "") || "Doctor";
     const content = parts[3]?.replace("Content: ", "") || "";
-    const date = parts[4]?.replace("Date: ", "") || "12 Aug 2026";
+    const date = parts[4]?.replace("Date: ", "") || getTodayKolkataUiDate();
     return { title, category, author, content, date };
   }
   return {
@@ -959,7 +1072,7 @@ const parseClinicalNote = (noteStr: string) => {
     category: "General",
     author: "Practitioner",
     content: noteStr,
-    date: "12 Aug 2026"
+    date: getTodayKolkataUiDate()
   };
 };
 
@@ -1005,7 +1118,7 @@ export function validate10DigitPhone(phoneStr: string): boolean {
   return digits.length === 10;
 }
 
-// Sequential 4-digit Patient ID Generator (0001, 0002, ...)
+// Sequential OP Number / Patient ID Generator (starts from 10001, 10002, ...)
 export function getNextSequentialPatientId(patientsList: Array<{ id?: string; patient_id?: string }>): string {
   let maxNum = 0;
   patientsList.forEach(p => {
@@ -1020,8 +1133,8 @@ export function getNextSequentialPatientId(patientsList: Array<{ id?: string; pa
       });
     }
   });
-  const nextNum = maxNum + 1;
-  return nextNum.toString().padStart(4, "0");
+  const nextNum = maxNum >= 10001 ? maxNum + 1 : 10001;
+  return nextNum.toString();
 }
 
 const DEFAULT_MOCK_PATIENTS = [
@@ -1042,19 +1155,18 @@ const DEFAULT_MOCK_PATIENTS = [
   { id: "DS-1015", name: "Rajesh Khanna", phone: "+91 98100 90123", age: 60, gender: "Male", address: "Richmond Town, Bengaluru", visit: "15 Jun 2026", medicalNotes: "Penicillin Allergy", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] }
 ];
 
-const DEFAULT_MOCK_MEDICINES: MedicineItem[] = [
-  { id: "med-1", name: "Roles-D", stock_unit: "tablets", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-2", name: "Taxim-O 200", stock_unit: "tablets", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-3", name: "Acecloren", stock_unit: "tablets", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-4", name: "Zerodol-MR", stock_unit: "tablets", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-5", name: "Flagyl 400", stock_unit: "tablets", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-6", name: "Zerodol-SP", stock_unit: "tablets", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-7", name: "Orahex-DG", stock_unit: "bottles", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-8", name: "Sensodent-K", stock_unit: "tubes", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-9", name: "Orohealth Toothpaste", stock_unit: "tubes", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-10", name: "Ornigreat Gel", stock_unit: "tubes", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-  { id: "med-11", name: "Flagyl Gel", stock_unit: "tubes", opening_stock: null, available_quantity: null, low_stock_threshold: 5, is_active: true, is_configured: false },
-];
+const DEFAULT_MOCK_MEDICINES: MedicineItem[] = INITIAL_MEDICINES_CATALOGUE.map((item, idx) => ({
+  id: `med-${idx + 1}`,
+  name: item.name,
+  category: item.category,
+  dosage_form: item.dosage_form,
+  stock_unit: item.stock_unit,
+  opening_stock: null,
+  available_quantity: null,
+  low_stock_threshold: 5,
+  is_active: true,
+  is_configured: false,
+}));
 
 export function getMedicineStockStatus(med: MedicineItem): "not_configured" | "out_of_stock" | "low_stock" | "in_stock" {
   if (!med.is_configured || med.available_quantity === null || med.available_quantity === undefined) {
@@ -1099,49 +1211,11 @@ export function renderStockStatusBadge(status: "not_configured" | "out_of_stock"
 }
 
 export function convertToDbDate(uiDate: string): string {
-  if (!uiDate) return new Date().toISOString().split("T")[0];
-  if (/^\d{4}-\d{2}-\d{2}$/.test(uiDate)) return uiDate;
-
-  const parts = uiDate.split(" ");
-  if (parts.length === 3) {
-    const day = parts[0].padStart(2, "0");
-    const monthStr = parts[1].substring(0, 3);
-    const year = parts[2];
-
-    const months: Record<string, string> = {
-      Jan: "01", Feb: "02", Mar: "03", Apr: "04", May: "05", Jun: "06",
-      Jul: "07", Aug: "08", Sep: "09", Oct: "10", Nov: "11", Dec: "12"
-    };
-
-    const month = months[monthStr] || "01";
-    return `${year}-${month}-${day}`;
-  }
-
-  try {
-    const d = new Date(uiDate);
-    if (!isNaN(d.getTime())) {
-      return d.toISOString().split("T")[0];
-    }
-  } catch (e) {}
-
-  return uiDate;
+  return formatUiDateToDb(uiDate);
 }
 
 export function convertToUiDate(dbDate: string): string {
-  if (!dbDate) return "12 Aug 2026";
-  const parts = dbDate.split("-");
-  if (parts.length === 3) {
-    const year = parts[0];
-    const monthNum = parts[1];
-    const day = parts[2].padStart(2, "0");
-
-    const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const monthIndex = parseInt(monthNum, 10) - 1;
-    const month = months[monthIndex] || "Jan";
-
-    return `${day} ${month} ${year}`;
-  }
-  return dbDate;
+  return formatDbDateToUi(dbDate);
 }
 
 export function formatWhatsAppRecipientNumber(phoneStr: string): string {
@@ -1219,83 +1293,96 @@ export function normalizeTimeSlot(timeStr: string): string {
   return cleaned;
 };
 
+const formatBytes = (bytes: number, decimals = 1): string => {
+  if (!+bytes || bytes <= 0) return "0 Bytes";
+  const k = 1024;
+  const dm = decimals < 0 ? 0 : decimals;
+  const sizes = ["Bytes", "KB", "MB", "GB"];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i] || "MB"}`;
+};
+
 export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initialTab?: string } = {}) {
   const router = useRouter();
   const [loadingSession, setLoadingSession] = useState(true);
   const [userRole, setUserRole] = useState<"owner" | "receptionist">("owner");
   const [currentUserName, setCurrentUserName] = useState<string>("");
+  const [currentUserId, setCurrentUserId] = useState<string>("");
   const isOwner = userRole === "owner";
   const isReceptionist = userRole === "receptionist";
   const supabase = useMemo(() => createClient(), []);
-  const isFetchingClinicDataRef = useRef(false);
-  const sessionHandledRef = useRef<string | null>(null);
-  const lastPushedActivityRef = useRef<{ msg: string; time: number } | null>(null);
 
-  // Isolated in-memory demo patient loader — isolated from production and NEVER seeded to live Supabase database
-  const loadDemoPatientsInMemory = () => {
-    const demoPatients: Patient[] = DEFAULT_MOCK_PATIENTS.map(p => ({
-      id: p.id,
+  const seedMockPatients = async () => {
+    const insertRows = DEFAULT_MOCK_PATIENTS.map(p => ({
+      patient_id: p.id,
       name: p.name,
       phone: p.phone,
       age: p.age,
-      gender: (p.gender === "Male" || p.gender === "Female") ? p.gender : "Male",
+      gender: p.gender,
       address: p.address,
       visit: p.visit,
-      medicalNotes: p.medicalNotes,
+      medical_notes: p.medicalNotes,
       balance: p.balance,
-      status: (p.status === "Active" || p.status === "Inactive") ? p.status : "Active",
-      dentalChart: p.dentalChart as Record<number, string>,
+      status: p.status,
+      dental_chart: p.dentalChart,
       prescriptions: p.prescriptions,
       files: p.files,
       notes: p.notes
     }));
-    setPatients(demoPatients);
+
+    const { error } = await supabase
+      .from("patients")
+      .insert(insertRows);
+
+    if (error) {
+      console.error("Failed to seed mock patients in database:", error.message, error.code);
+    }
   };
 
   const fetchClinicData = async () => {
-    if (isFetchingClinicDataRef.current) return;
-    isFetchingClinicDataRef.current = true;
+    // 1. Fetch patients
+    const { data: dbPatients, error: patErr } = await supabase
+      .from("patients")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-    try {
-      // 1. Fetch patients
-      const { data: dbPatients, error: patErr } = await supabase
-        .from("patients")
-        .select("*")
-        .order("created_at", { ascending: false });
+    if (patErr) {
+      console.error("Failed to load patients from database:", patErr.message, patErr.code);
+      showToast("Error loading patients from database.", "error");
+      return;
+    }
 
-      if (patErr) {
-        console.error("Failed to load patients from database:", patErr.message, patErr.code);
-        showToast("Error loading patients from database.", "error");
-        return;
+    if (dbPatients) {
+      if (dbPatients.length === 0) {
+        setPatients([]);
+      } else {
+        const mappedPatients: Patient[] = dbPatients.map((p: any) => ({
+          id: p.patient_id,
+          uuid: p.id,
+          name: p.name,
+          phone: p.phone,
+          age: p.age || 0,
+          gender: (p.gender === "Male" || p.gender === "Female") ? p.gender : "Male",
+          address: p.address || "",
+          visit: p.visit || "",
+          medicalNotes: p.medical_notes || "None",
+          balance: p.balance || "₹0",
+          status: (p.status === "Active" || p.status === "Inactive") ? p.status : "Active",
+          dentalChart: p.dental_chart || {},
+          prescriptions: p.prescriptions || [],
+          files: Array.isArray(p.files) ? p.files : [],
+          notes: p.notes || [],
+          email: p.email || undefined,
+          bloodGroup: p.blood_group || undefined,
+          patientType: p.patient_type || undefined,
+          occupation: p.occupation || undefined,
+          reference: p.reference || undefined,
+          medicalHistory: Array.isArray(p.medical_history) ? p.medical_history : [],
+          medicalHistoryOthers: p.medical_history_others || undefined,
+          createdAt: p.created_at || undefined
+        }));
+        setPatients(mappedPatients);
       }
-
-      if (dbPatients) {
-        const mappedPatients: Patient[] = dbPatients.map(p => ({
-        id: p.patient_id,
-        uuid: p.id,
-        name: p.name,
-        phone: p.phone,
-        age: p.age || 0,
-        gender: (p.gender === "Male" || p.gender === "Female") ? p.gender : "Male",
-        address: p.address || "",
-        visit: p.visit || "",
-        medicalNotes: p.medical_notes || "None",
-        balance: p.balance || "₹0",
-        status: (p.status === "Active" || p.status === "Inactive") ? p.status : "Active",
-        dentalChart: p.dental_chart || {},
-        prescriptions: p.prescriptions || [],
-        files: Array.isArray(p.files) ? p.files : [],
-        notes: p.notes || [],
-        email: p.email || undefined,
-        bloodGroup: p.blood_group || undefined,
-        patientType: p.patient_type || undefined,
-        occupation: p.occupation || undefined,
-        reference: p.reference || undefined,
-        medicalHistory: Array.isArray(p.medical_history) ? p.medical_history : [],
-        medicalHistoryOthers: p.medical_history_others || undefined,
-        createdAt: p.created_at || undefined
-      }));
-      setPatients(mappedPatients);
     }
 
     // 2. Fetch billing / invoices
@@ -1307,10 +1394,10 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     if (billErr) {
       showToast("Error loading invoices from database.", "error");
     } else if (dbBilling) {
-      const mappedInvoices: InvoiceItem[] = dbBilling.map(b => ({
+      const mappedInvoices: InvoiceItem[] = dbBilling.map((b: any) => ({
         id: b.invoice_id,
         uuid: b.id,
-        patientId: dbPatients?.find(p => p.id === b.patient_id)?.patient_id || "",
+        patientId: dbPatients?.find((p: any) => p.id === b.patient_id)?.patient_id || "",
         patientName: b.patient_name,
         doctor: b.doctor || "",
         treatment: b.treatment || "",
@@ -1339,7 +1426,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       console.error("Failed to load doctors from database:", docErr.message, docErr.code);
       showToast("Error loading doctors from database.", "error");
     } else if (dbDoctors) {
-      const mappedDoctors: Doctor[] = dbDoctors.map(d => ({
+      const mappedDoctors: Doctor[] = dbDoctors.map((d: any) => ({
         id: d.id,
         name: d.name,
         speciality: d.specialty || "",
@@ -1359,14 +1446,14 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       console.error("Failed to load appointments from database:", apptErr.message, apptErr.code);
       showToast("Error loading appointments from database.", "error");
     } else if (dbAppointments) {
-      const mappedAppointments: Appointment[] = dbAppointments.map(a => {
+      const mappedAppointments: Appointment[] = dbAppointments.map((a: any) => {
         // Resolve patient details
-        const patRecord = dbPatients?.find(p => p.id === a.patient_id);
+        const patRecord = dbPatients?.find((p: any) => p.id === a.patient_id);
         const localPatientId = patRecord ? patRecord.patient_id : "Unknown ID";
         const localPatientName = patRecord ? patRecord.name : "Unknown Name";
 
         // Resolve doctor name
-        const docRecord = dbDoctors?.find(d => d.id === a.doctor_id);
+        const docRecord = dbDoctors?.find((d: any) => d.id === a.doctor_id);
         const localDoctorName = docRecord ? docRecord.name : (a.doctor_id ? "Unknown Doctor" : "Unassigned");
 
         return {
@@ -1393,47 +1480,19 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     }
 
     // 6. Fetch activities
-    try {
-      const { data: dbActivities, error: actErr } = await supabase
-        .from("activities")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(20);
-
-      if (actErr) {
-        console.warn("Non-fatal: optional activities log fetch notice:", actErr.message);
-      } else if (dbActivities && dbActivities.length > 0) {
-        const mappedAct: ActivityItem[] = dbActivities.map((act: any) => {
-          const titleStr = act.title || act.description || "";
-          let inferredType: ActivityItem["type"] = "Register";
-          if (act.entity_type) {
-            inferredType = act.entity_type;
-          } else if (titleStr.toLowerCase().includes("appoint") || titleStr.toLowerCase().includes("slot") || titleStr.toLowerCase().includes("schedul")) {
-            inferredType = "Appointment";
-          } else if (titleStr.toLowerCase().includes("treat") || titleStr.toLowerCase().includes("consult") || titleStr.toLowerCase().includes("proced")) {
-            inferredType = "Treatment";
-          } else if (titleStr.toLowerCase().includes("bill") || titleStr.toLowerCase().includes("invoice")) {
-            inferredType = "Billing";
-          } else if (titleStr.toLowerCase().includes("pay")) {
-            inferredType = "Payment";
-          } else if (titleStr.toLowerCase().includes("prescr")) {
-            inferredType = "Prescription";
-          } else if (titleStr.toLowerCase().includes("chart")) {
-            inferredType = "Chart";
-          }
-
-          const dateStr = act.created_at || act.timestamp;
-          return {
-            id: act.id,
-            type: inferredType,
-            msg: titleStr || "Activity logged",
-            time: dateStr ? convertToUiDate(dateStr.split("T")[0]) : "Today"
-          };
-        });
-        setActivities(mappedAct);
-      }
-    } catch (err: any) {
-      console.warn("Non-fatal: error loading activities:", err?.message || err);
+    const { data: dbActivities } = await supabase
+      .from("activities")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (dbActivities && dbActivities.length > 0) {
+      const mappedAct: ActivityItem[] = dbActivities.map((act: any) => ({
+        id: act.id,
+        type: (act.entity_type as any) || "Register",
+        msg: act.description,
+        time: act.created_at ? formatTimestampToKolkataUi(act.created_at, true) : "Today"
+      }));
+      setActivities(mappedAct);
     }
 
     // 7. Fetch notifications
@@ -1443,7 +1502,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       .order("created_at", { ascending: false })
       .limit(20);
     if (dbNotifs && dbNotifs.length > 0) {
-      setNotifications(dbNotifs.map(n => ({ id: n.id, msg: n.message, unread: !n.is_read })));
+      setNotifications(dbNotifs.map((n: any) => ({ id: n.id, msg: n.message, unread: !n.is_read })));
     }
 
     // 8. Fetch treatments
@@ -1456,9 +1515,9 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       console.error("Failed to load treatments from database:", treatErr.message, treatErr.code);
       showToast("Error loading treatments from database.", "error");
     } else if (dbTreatments) {
-      const mappedTr: TreatmentItem[] = dbTreatments.map(t => {
-        const patRecord = dbPatients?.find(p => p.id === t.patient_id);
-        const docRecord = dbDoctors?.find(d => d.id === t.doctor_id);
+      const mappedTr: TreatmentItem[] = dbTreatments.map((t: any) => {
+        const patRecord = dbPatients?.find((p: any) => p.id === t.patient_id);
+        const docRecord = dbDoctors?.find((d: any) => d.id === t.doctor_id);
 
         return {
           id: t.id,
@@ -1467,12 +1526,12 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           doctor: docRecord ? docRecord.name : "",
           stage: (t.stage === "Completed" || t.stage === "In Progress") ? t.stage : "Planned",
           notes: t.notes || "",
-          nextVisit: "19 Aug 2026",
+          nextVisit: (t as any).next_visit ? convertToUiDate((t as any).next_visit) : "",
           prescription: "",
           tooth: t.tooth_number || undefined,
           cost: t.cost !== null && t.cost !== undefined ? Number(t.cost) : undefined,
           diagnosis: t.diagnosis || undefined,
-          date: t.treatment_date ? convertToUiDate(t.treatment_date) : (t.created_at ? convertToUiDate(t.created_at.split("T")[0]) : undefined)
+          date: t.treatment_date ? convertToUiDate(t.treatment_date) : (t.created_at ? formatTimestampToKolkataUi(t.created_at) : undefined)
         };
       });
       setTreatments(mappedTr);
@@ -1482,8 +1541,10 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     const { data: dbProfiles } = await supabase
       .from("profiles")
       .select("*");
+    let hasReceptionistAccount = false;
+    let foundReceptionistProfile: any = null;
     if (dbProfiles && dbProfiles.length > 0) {
-      const mappedStaff: Staff[] = dbProfiles.map(p => ({
+      const mappedStaff: Staff[] = dbProfiles.map((p: any) => ({
         id: p.id,
         name: p.full_name || "Staff Member",
         role: p.custom_title || (p.role === "owner" ? "Owner / Dentist" : "Receptionist"),
@@ -1492,52 +1553,101 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       }));
       setStaffList(mappedStaff);
 
-      const receptionistProfile = dbProfiles.find(p => p.role === "receptionist" || p.custom_title?.toLowerCase().includes("reception") || p.custom_title?.toLowerCase().includes("desk"));
-      if (receptionistProfile?.full_name) {
-        setReceptionistUser(receptionistProfile.full_name);
+      foundReceptionistProfile = dbProfiles.find((p: any) => p.role === "receptionist" || p.custom_title?.toLowerCase().includes("reception") || p.custom_title?.toLowerCase().includes("desk"));
+      if (foundReceptionistProfile?.full_name) {
+        setReceptionistUser(foundReceptionistProfile.full_name);
+        setIsReceptionistAccountIdentity(true);
+        hasReceptionistAccount = true;
+      } else {
+        setIsReceptionistAccountIdentity(false);
       }
     }
 
-    // 10. Fetch medicines inventory & transactions
-    const { data: dbMeds, error: medErr } = await supabase
+    // 10. Fetch clinic settings
+    try {
+      const { data: dbSettings, error: csErr } = await supabase
+        .from("clinic_settings")
+        .select("*")
+        .limit(1)
+        .maybeSingle();
+
+      if (csErr) {
+        console.error("Error loading clinic settings from database:", csErr.message);
+      } else if (dbSettings) {
+        setSettingsRecordId(dbSettings.id);
+        if (dbSettings.clinic_name) {
+          setClinicName(dbSettings.clinic_name);
+        }
+        if (dbSettings.address) {
+          setClinicAddress(dbSettings.address);
+        }
+        if (!hasReceptionistAccount && dbSettings.receptionist_name) {
+          setReceptionistUser(dbSettings.receptionist_name);
+        }
+        try {
+          localStorage.setItem("clinic_settings", JSON.stringify({
+            clinicName: dbSettings.clinic_name || "",
+            clinicAddress: dbSettings.address || "",
+            receptionistUser: hasReceptionistAccount ? (foundReceptionistProfile?.full_name || "") : (dbSettings.receptionist_name || "")
+          }));
+        } catch (e) {}
+      }
+    } catch (csErr) {
+      console.error("Unexpected error loading clinic settings:", csErr);
+    }
+
+    // 10. Fetch medicines catalogue & transactions
+    try {
+      const { data: dbMeds, error: medErr } = await supabase
         .from("medicines")
         .select("*")
         .order("name", { ascending: true });
 
-      if (!medErr && dbMeds && dbMeds.length > 0) {
-        setMedicines(dbMeds.map(m => ({
-          id: m.id,
-          name: m.name,
-          stock_unit: m.stock_unit,
-          opening_stock: m.opening_stock !== null ? Number(m.opening_stock) : null,
-          available_quantity: m.available_quantity !== null ? Number(m.available_quantity) : null,
-          low_stock_threshold: Number(m.low_stock_threshold || 5),
-          is_active: m.is_active ?? true,
-          is_configured: m.is_configured ?? false,
-          created_at: m.created_at,
-          updated_at: m.updated_at
-        })));
+      if (!medErr && dbMeds) {
+        const sanitizedDbMeds: MedicineItem[] = dbMeds
+          .filter((m: any) => !isOldMockMedicine(m.name))
+          .map((m: any) => ({
+            id: m.id,
+            name: m.name,
+            category: m.category || getCategoryForMedicine(m.name),
+            dosage_form: m.dosage_form || (INITIAL_MEDICINES_CATALOGUE.find(c => c.name.toLowerCase() === m.name.toLowerCase())?.dosage_form || "Tablet"),
+            stock_unit: m.stock_unit || "tablets",
+            opening_stock: m.opening_stock !== null ? Number(m.opening_stock) : null,
+            available_quantity: m.available_quantity !== null ? Number(m.available_quantity) : null,
+            low_stock_threshold: Number(m.low_stock_threshold || 5),
+            is_active: m.is_active ?? true,
+            is_configured: m.is_configured ?? false,
+            created_at: m.created_at,
+            updated_at: m.updated_at
+          }));
+
+        // Merge initial 35 catalogue entries so none are missing if DB is unseeded or partially seeded
+        const dbNamesLower = new Set(sanitizedDbMeds.map(m => m.name.toLowerCase()));
+        const missingInitial = DEFAULT_MOCK_MEDICINES.filter(
+          initMed => !dbNamesLower.has(initMed.name.toLowerCase())
+        );
+
+        setMedicines([...sanitizedDbMeds, ...missingInitial]);
       }
 
       const { data: dbTx, error: txErr } = await supabase
         .from("stock_transactions")
         .select("*")
-        .order("created_at", { ascending: false });
+        .order("transaction_date", { ascending: false });
 
       if (!txErr && dbTx) {
-        setStockTransactions(dbTx.map(t => ({
+        setStockTransactions(dbTx.map((t: any) => ({
           id: t.id,
           medicine_id: t.medicine_id,
           transaction_type: t.transaction_type,
           quantity: Number(t.quantity),
           previous_quantity: t.previous_quantity !== null ? Number(t.previous_quantity) : null,
           new_quantity: Number(t.new_quantity),
-          transaction_date: t.transaction_date || t.created_at,
+          transaction_date: t.transaction_date,
           reference: t.reference,
           notes: t.notes,
           prescription_id: t.prescription_id,
-          created_by: t.created_by,
-          created_at: t.created_at
+          created_by: t.created_by
         })));
       }
 
@@ -1547,7 +1657,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         .order("created_at", { ascending: false });
 
       if (!prescErr && dbPrescs) {
-        setPatientPrescriptionsList(dbPrescs.map(pr => ({
+        setPatientPrescriptionsList(dbPrescs.map((pr: any) => ({
           id: pr.id,
           patient_id: pr.patient_id,
           patient_name: pr.patient_name,
@@ -1560,9 +1670,53 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         })));
       }
     } catch (err) {
-      console.error("Error fetching clinic data:", err);
-    } finally {
-      isFetchingClinicDataRef.current = false;
+      console.error("Error fetching medicine stock data:", err);
+    }
+
+    // 11. Fetch Treatment Catalogue
+    try {
+      const { data: dbTreatmentCats, error: trCatErr } = await supabase
+        .from("treatment_categories")
+        .select("*")
+        .order("sort_order", { ascending: true });
+
+      if (!trCatErr && dbTreatmentCats && dbTreatmentCats.length > 0) {
+        const loadedCats: TreatmentCategoryDef[] = dbTreatmentCats.map((row: any) => ({
+          id: row.id,
+          name: row.name,
+          displayName: row.display_name || row.name,
+          colorKey: row.color_key,
+          colorDot: row.color_dot,
+          colorBadge: row.color_badge,
+          colorTooth: row.color_tooth,
+          subTreatments: Array.isArray(row.sub_treatments) ? row.sub_treatments : [],
+          aliases: Array.isArray(row.aliases) ? row.aliases : [],
+          sortOrder: row.sort_order ?? 0,
+          isActive: row.is_active ?? true,
+        }));
+        setTreatmentCategories(loadedCats);
+        setDynamicCatalogue(loadedCats);
+        if (typeof window !== "undefined") {
+          try {
+            localStorage.setItem("dentpro_treatment_catalogue", JSON.stringify(loadedCats));
+          } catch (e) {}
+        }
+      } else {
+        if (typeof window !== "undefined") {
+          const stored = localStorage.getItem("dentpro_treatment_catalogue");
+          if (stored) {
+            try {
+              const parsed = JSON.parse(stored);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setTreatmentCategories(parsed);
+                setDynamicCatalogue(parsed);
+              }
+            } catch (e) {}
+          }
+        }
+      }
+    } catch (catFetchErr) {
+      console.warn("Treatment categories fetch notice:", catFetchErr);
     }
   };
 
@@ -1611,25 +1765,12 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   };
 
   useEffect(() => {
-    let isMounted = true;
-
     const handleSessionSuccess = async (session: any) => {
-      if (!isMounted) return;
-      const userId = session?.user?.id;
-      if (!userId) return;
-
-      if (sessionHandledRef.current === userId) {
-        return;
-      }
-      sessionHandledRef.current = userId;
-
       let { data: profile, error: profileErr } = await supabase
         .from("profiles")
         .select("id, role, full_name, status")
-        .eq("id", userId)
+        .eq("id", session.user.id)
         .maybeSingle();
-
-      if (!isMounted) return;
 
       if (profileErr) {
         showToast("Error retrieving user profile.", "error");
@@ -1650,7 +1791,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         const { error: insertProfileErr } = await supabase
           .from("profiles")
           .insert({
-            id: userId,
+            id: session.user.id,
             role: "owner",
             full_name: defaultName,
             status: "Active"
@@ -1661,25 +1802,23 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           setLoadingSession(false);
           return;
         }
-        if (!isMounted) return;
         setUserRole("owner");
         setCurrentUserName(defaultName);
+        setCurrentUserId(session.user.id);
       } else {
         const canonicalRole = profile.role === "receptionist" ? "receptionist" : "owner";
         setUserRole(canonicalRole);
         const resolvedName = profile.full_name || session.user?.user_metadata?.full_name || session.user?.email?.split("@")[0] || (canonicalRole === "owner" ? "Owner / Dentist" : "Receptionist");
         setCurrentUserName(resolvedName);
+        setCurrentUserId(session.user.id);
       }
 
       await fetchClinicData();
-      if (isMounted) {
-        setLoadingSession(false);
-      }
+      setLoadingSession(false);
     };
 
     const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!isMounted) return;
       if (!session) {
         router.push("/login");
       } else {
@@ -1689,10 +1828,8 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
     checkSession();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!isMounted) return;
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event: any, session: any) => {
       if (!session) {
-        sessionHandledRef.current = null;
         router.push("/login");
       } else {
         await handleSessionSuccess(session);
@@ -1700,13 +1837,11 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     });
 
     return () => {
-      isMounted = false;
       subscription.unsubscribe();
     };
   }, [router, supabase]);
 
   const handleLogout = async () => {
-    sessionHandledRef.current = null;
     await supabase.auth.signOut();
     router.push("/login");
   };
@@ -1728,14 +1863,17 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [stockTransactions, setStockTransactions] = useState<StockTransaction[]>([]);
   const [patientPrescriptionsList, setPatientPrescriptionsList] = useState<PatientPrescriptionRecord[]>([]);
 
-  // Inventory UI Filters
+  // Inventory & Catalogue UI Filters
   const [stockSearchQuery, setStockSearchQuery] = useState("");
+  const [stockCategoryFilter, setStockCategoryFilter] = useState<string>("");
   const [stockStatusFilter, setStockStatusFilter] = useState<"All" | "In Stock" | "Low Stock" | "Not Configured">("All");
 
   // Medicine Add / Edit Modal State
   const [medicineModalOpen, setMedicineModalOpen] = useState(false);
   const [editingMedicine, setEditingMedicine] = useState<MedicineItem | null>(null);
   const [medFormName, setMedFormName] = useState("");
+  const [medFormCategory, setMedFormCategory] = useState<string>("Tablets / Capsules");
+  const [medFormDosageForm, setMedFormDosageForm] = useState<string>("Tablet");
   const [medFormUnit, setMedFormUnit] = useState("tablets");
   const [medFormOpeningStock, setMedFormOpeningStock] = useState("");
   const [medFormThreshold, setMedFormThreshold] = useState("5");
@@ -1745,7 +1883,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [addStockModalOpen, setAddStockModalOpen] = useState(false);
   const [selectedStockMedicine, setSelectedStockMedicine] = useState<MedicineItem | null>(null);
   const [addStockQty, setAddStockQty] = useState("");
-  const [addStockDate, setAddStockDate] = useState(new Date().toISOString().split("T")[0]);
+  const [addStockDate, setAddStockDate] = useState(() => getTodayKolkataDbDate());
   const [addStockSupplier, setAddStockSupplier] = useState("");
   const [addStockNotes, setAddStockNotes] = useState("");
 
@@ -1754,7 +1892,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [adjustStockMedicine, setAdjustStockMedicine] = useState<MedicineItem | null>(null);
   const [adjustStockNewQty, setAdjustStockNewQty] = useState("");
   const [adjustStockReason, setAdjustStockReason] = useState("");
-  const [adjustStockDate, setAdjustStockDate] = useState(new Date().toISOString().split("T")[0]);
+  const [adjustStockDate, setAdjustStockDate] = useState(() => getTodayKolkataDbDate());
 
   // Movement Log / History Modal State
   const [historyModalOpen, setHistoryModalOpen] = useState(false);
@@ -1770,6 +1908,52 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     dispensingQty: number;
     stockUnit: string;
     availableStock: number | null;
+  } | null>(null);
+
+  // Treatment Catalogue Management States
+  const [treatmentCategories, setTreatmentCategories] = useState<TreatmentCategoryDef[]>(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("dentpro_treatment_catalogue");
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setDynamicCatalogue(parsed);
+            return parsed;
+          }
+        } catch (e) {}
+      }
+    }
+    return TREATMENT_CATEGORIES;
+  });
+  const [treatmentsSearchQuery, setTreatmentsSearchQuery] = useState("");
+  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({
+    extractions: true,
+    crowns: true,
+    scaling: true,
+    orthodontics: true,
+    prosthodontics: true,
+    implants: true,
+    pediatric: true,
+    "root-canal": false,
+    filling: false,
+    consultation: false,
+  });
+
+  const [categoryModalOpen, setCategoryModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState<TreatmentCategoryDef | null>(null);
+  const [catFormName, setCatFormName] = useState("");
+  const [catFormColorKey, setCatFormColorKey] = useState("Blue");
+
+  const [subTreatmentModalOpen, setSubTreatmentModalOpen] = useState(false);
+  const [editingSubTreatment, setEditingSubTreatment] = useState<{ categoryId: string; subName: string; originalSubName?: string } | null>(null);
+  const [subFormCatId, setSubFormCatId] = useState("");
+  const [subFormName, setSubFormName] = useState("");
+
+  const [deleteTreatmentConfirm, setDeleteTreatmentConfirm] = useState<{
+    type: "category" | "subTreatment";
+    category: TreatmentCategoryDef;
+    subName?: string;
   } | null>(null);
 
   // Global Dialog triggers
@@ -1928,7 +2112,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     setEditInvoiceTotal(inv.total || 0);
     setEditInvoicePaidAmount(inv.paidAmount || 0);
     setEditInvoiceStatus(inv.status || "Pending");
-    setEditInvoicePaymentDate(inv.paymentDate || "12 Aug 2026");
+    setEditInvoicePaymentDate(inv.paymentDate || getTodayKolkataUiDate());
   };
 
   const handleSaveEditInvoice = async (e: React.FormEvent) => {
@@ -2020,6 +2204,8 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   };
   const [selectedPatientId, setSelectedPatientId] = useState<string | null>(null);
   const [profileSubTab, setProfileSubTab] = useState("Case Sheet");
+  const [patientToDelete, setPatientToDelete] = useState<Patient | null>(null);
+  const [isDeletingPatient, setIsDeletingPatient] = useState<boolean>(false);
 
   // Form input states (Patient / Appt modals)
   const [newPatName, setNewPatName] = useState("");
@@ -2032,8 +2218,8 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [apptPatientId, setApptPatientId] = useState("");
   const [apptDoctor, setApptDoctor] = useState("Dr. Deepa Kodali");
   const [apptTreatment, setApptTreatment] = useState("Consultation");
-  const [apptTime, setApptTime] = useState("09:00 AM");
-  const [apptDate, setApptDate] = useState("12 Aug 2026");
+  const [apptTime, setApptTime] = useState(() => getNextAvailableAppointmentSlot());
+  const [apptDate, setApptDate] = useState(() => getTodayKolkataUiDate());
   const [apptNotes, setApptNotes] = useState("");
 
   // Consultation clinical workspace inputs
@@ -2061,21 +2247,18 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   // Timeframe filter for reports page
   const [reportsFilter, setReportsFilter] = useState<string>("Today");
   const [customRangeModalOpen, setCustomRangeModalOpen] = useState(false);
-  const [customStartDate, setCustomStartDate] = useState("2026-08-01");
-  const [customEndDate, setCustomEndDate] = useState("2026-08-14");
+  const { startDb: initReportStart, endDb: initReportEnd } = getCurrentMonthRangeKolkata();
+  const [customStartDate, setCustomStartDate] = useState(initReportStart);
+  const [customEndDate, setCustomEndDate] = useState(initReportEnd);
   const [appliedCustomLabel, setAppliedCustomLabel] = useState<string | null>(null);
   const [patientsPeriod, setPatientsPeriod] = useState<"Today" | "This Week" | "This Month" | "Last Month" | "This Year" | "Custom Range">("This Month");
 
   // Redesigned dashboard state variables
   const getTodayLocalDateStr = (): string => {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, "0");
-    const d = String(now.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
+    return getTodayKolkataDbDate();
   };
 
-  const dynamicTodayUiDate = convertToUiDate(getTodayLocalDateStr());
+  const dynamicTodayUiDate = getTodayKolkataUiDate();
   const [selectedCalendarDay, setSelectedCalendarDay] = useState(dynamicTodayUiDate);
   const [currentWeekStart, setCurrentWeekStart] = useState<Date>(() => getMondayOfCurrentWeek());
   const [blockedSlots, setBlockedSlots] = useState<Record<string, boolean>>({});
@@ -2083,10 +2266,15 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
   useEffect(() => {
     const updateHeaderDate = () => {
-      const d = new Date();
-      const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-      setCurrentHeaderDate(`${days[d.getDay()]}, ${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`);
+      const now = new Date();
+      const formatter = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "Asia/Kolkata",
+        weekday: "long",
+        day: "numeric",
+        month: "short",
+        year: "numeric"
+      });
+      setCurrentHeaderDate(formatter.format(now));
     };
     updateHeaderDate();
   }, []);
@@ -2658,12 +2846,16 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [editIntraOralExam, setEditIntraOralExam] = useState("");
   const [editProvisionalDiagnosis, setEditProvisionalDiagnosis] = useState("");
   const [editTreatmentAdvised, setEditTreatmentAdvised] = useState("");
+  const [activePrintDoc, setActivePrintDoc] = useState<"casesheet" | "invoice" | "prescription" | null>(null);
 
   // --- TOOTH TREATMENT FORM STATE ---
   const [chartSelectedTooth, setChartSelectedTooth] = useState<number | null>(null);
   const [selectedTeeth, setSelectedTeeth] = useState<number[]>([]);
   const [activeTreatment, setActiveTreatment] = useState<string | null>(null);
+  const [modalCategory, setModalCategory] = useState<TreatmentCategoryDef | null>(null);
   const [showClearAllConfirm, setShowClearAllConfirm] = useState(false);
+  const [chartCategory, setChartCategory] = useState("");
+  const [chartSubTreatment, setChartSubTreatment] = useState("");
   const [chartTreatmentName, setChartTreatmentName] = useState("");
   const [chartDiagnosis, setChartDiagnosis] = useState("");
   const [chartStatus, setChartStatus] = useState<"Planned" | "In Progress" | "Completed">("Planned");
@@ -2671,6 +2863,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [chartDate, setChartDate] = useState("");
   const [chartCost, setChartCost] = useState("");
   const [chartNotes, setChartNotes] = useState("");
+  const [isSavingToothTreatment, setIsSavingToothTreatment] = useState(false);
 
   // --- TREATMENTS FORM STATE ---
   const [showAddTreatmentModal, setShowAddTreatmentModal] = useState(false);
@@ -2723,6 +2916,14 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [prescMeds, setPrescMeds] = useState<{ name: string; dosage: string; freq: string; duration: string; instructions: string }[]>([
     { name: "", dosage: "", freq: "", duration: "", instructions: "" }
   ]);
+  const [showPrescriptionPreviewModal, setShowPrescriptionPreviewModal] = useState(false);
+  const [activePrintPrescription, setActivePrintPrescription] = useState<{
+    doctorName?: string;
+    date?: string;
+    diagnosis?: string;
+    medicines: Array<{ name: string; dosage: string; duration: string; instructions: string; strength?: string }>;
+    advice?: string;
+  } | null>(null);
 
   // --- INVOICE FORM STATES ---
   const [invProcedure, setInvProcedure] = useState("");
@@ -2730,6 +2931,97 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [invDiscount, setInvDiscount] = useState("0");
   const [invTax, setInvTax] = useState("0");
   const [invPaid, setInvPaid] = useState("0");
+
+  // Multi-treatment invoice states (Matching Sameeksha Workflow)
+  const getNextInvoiceId = () => {
+    const num = (invoices?.length || 0) + 101;
+    return `INV-${num}`;
+  };
+
+  const [invoiceCustomId, setInvoiceCustomId] = useState("");
+  const [invoiceDoctor, setInvoiceDoctor] = useState("Dr. Deepa Kodali");
+  const [invoiceTreatmentRows, setInvoiceTreatmentRows] = useState<MultiTreatmentRow[]>([
+    { id: "row_1", description: "", quantity: 1, unitPrice: "", amount: 0 }
+  ]);
+  const [invoiceDiscountType, setInvoiceDiscountType] = useState<"percentage" | "fixed">("percentage");
+  const [invoiceDiscountValue, setInvoiceDiscountValue] = useState<string>("0");
+  const [invoicePaidAmount, setInvoicePaidAmount] = useState<string>("0");
+  const [invoicePaymentMode, setInvoicePaymentMode] = useState<string>("Cash");
+  const [isSavingMultiInvoice, setIsSavingMultiInvoice] = useState(false);
+
+  // Global Create Invoice Modal (from Billing module)
+  const [isGlobalCreateInvoiceModalOpen, setIsGlobalCreateInvoiceModalOpen] = useState(false);
+  const [globalInvoicePatientId, setGlobalInvoicePatientId] = useState("");
+
+  const handleAddTreatmentRow = () => {
+    setInvoiceTreatmentRows(prev => [
+      ...prev,
+      {
+        id: `row_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        description: "",
+        quantity: 1,
+        unitPrice: "",
+        amount: 0,
+      }
+    ]);
+  };
+
+  const handleRemoveTreatmentRow = (rowId: string) => {
+    setInvoiceTreatmentRows(prev => {
+      if (prev.length <= 1) {
+        return [{ id: `row_${Date.now()}`, description: "", quantity: 1, unitPrice: "", amount: 0 }];
+      }
+      return prev.filter(r => r.id !== rowId);
+    });
+  };
+
+  const handleUpdateTreatmentRow = (
+    rowId: string,
+    field: "description" | "quantity" | "unitPrice",
+    val: string | number
+  ) => {
+    setInvoiceTreatmentRows(prev =>
+      prev.map(row => {
+        if (row.id !== rowId) return row;
+        const updated = { ...row, [field]: val };
+        const q = Number(field === "quantity" ? val : row.quantity) || 1;
+        const p = Number(field === "unitPrice" ? val : row.unitPrice) || 0;
+        updated.amount = q * p;
+        return updated;
+      })
+    );
+  };
+
+  const resetMultiTreatmentForm = () => {
+    setInvoiceCustomId(getNextInvoiceId());
+    setInvoiceTreatmentRows([
+      { id: `row_${Date.now()}`, description: "", quantity: 1, unitPrice: "", amount: 0 }
+    ]);
+    setInvoiceDiscountType("percentage");
+    setInvoiceDiscountValue("0");
+    setInvoicePaidAmount("0");
+    setInvoicePaymentMode("Cash");
+  };
+
+  const calculateInvoiceFormValues = () => {
+    const subtotal = invoiceTreatmentRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+    const discVal = Number(invoiceDiscountValue) || 0;
+    const discountAmount =
+      invoiceDiscountType === "percentage"
+        ? (subtotal * discVal) / 100
+        : discVal;
+    const totalPayable = Math.max(0, subtotal - discountAmount);
+    const paid = Number(invoicePaidAmount) || 0;
+    const balanceDue = Math.max(0, totalPayable - paid);
+
+    return {
+      subtotal,
+      discountAmount,
+      totalPayable,
+      paid,
+      balanceDue,
+    };
+  };
 
   const getPatientBalance = (patientId: string): number => {
     const patInvoices = invoices.filter(inv => inv.patientId === patientId || inv.patientName === patientId);
@@ -2784,6 +3076,21 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [newFileName, setNewFileName] = useState("");
   const [newFileType, setNewFileType] = useState("X-Ray Scan");
   const [newFileUploadedBy, setNewFileUploadedBy] = useState("");
+  const [selectedUploadFile, setSelectedUploadFile] = useState<File | null>(null);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [filePreviewModal, setFilePreviewModal] = useState<{
+    open: boolean;
+    name: string;
+    url: string;
+    type: "image" | "application/pdf";
+    category?: string;
+  } | null>(null);
+  const [fileToDelete, setFileToDelete] = useState<{
+    file: FileAttachment;
+    index: number;
+  } | null>(null);
+  const [isDeletingFile, setIsDeletingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
 
 
@@ -2799,11 +3106,11 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [patients, setPatients] = useState<Patient[]>([]);
 
   const MOCK_APPOINTMENTS: Appointment[] = [
-    { id: "appt-1", patientId: "DS-1001", patientName: "Aarav Mehta", doctor: "Dr. Deepa Kodali", treatment: "Root Canal", time: "09:00 AM", date: "12 Aug 2026", status: "Scheduled", notes: "Lower left molar treatment.", avatarColor: "bg-blue-100 text-blue-600" },
-    { id: "appt-2", patientId: "DS-1002", patientName: "Priya Patel", doctor: "Dr. Raghuram", treatment: "Scaling", time: "09:30 AM", date: "12 Aug 2026", status: "Scheduled", notes: "Routine scale and polish.", avatarColor: "bg-cyan-100 text-cyan-600" },
-    { id: "appt-3", patientId: "DS-1003", patientName: "Kabir Singh", doctor: "Dr. Deepa Kodali", treatment: "Root Canal", time: "10:00 AM", date: "12 Aug 2026", status: "Scheduled", notes: "Penicillin allergy precaution.", avatarColor: "bg-purple-100 text-purple-600" },
-    { id: "appt-4", patientId: "DS-1004", patientName: "Ananya Rao", doctor: "Dr. Srinivasa", treatment: "Implant", time: "10:30 AM", date: "12 Aug 2026", status: "Scheduled", notes: "Surgical post review.", avatarColor: "bg-emerald-100 text-emerald-600" },
-    { id: "appt-5", patientId: "DS-1005", patientName: "Rohan Kumar", doctor: "Dr. Priyanka Mane Pado", treatment: "Crown", time: "11:00 AM", date: "12 Aug 2026", status: "Scheduled", notes: "Crown margins assessment.", avatarColor: "bg-indigo-100 text-indigo-600" }
+    { id: "appt-1", patientId: "DS-1001", patientName: "Aarav Mehta", doctor: "Dr. Deepa Kodali", treatment: "Root Canal", time: "09:00 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Lower left molar treatment.", avatarColor: "bg-blue-100 text-blue-600" },
+    { id: "appt-2", patientId: "DS-1002", patientName: "Priya Patel", doctor: "Dr. Raghuram", treatment: "Scaling", time: "09:30 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Routine scale and polish.", avatarColor: "bg-cyan-100 text-cyan-600" },
+    { id: "appt-3", patientId: "DS-1003", patientName: "Kabir Singh", doctor: "Dr. Deepa Kodali", treatment: "Root Canal", time: "10:00 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Penicillin allergy precaution.", avatarColor: "bg-purple-100 text-purple-600" },
+    { id: "appt-4", patientId: "DS-1004", patientName: "Ananya Rao", doctor: "Dr. Srinivasa", treatment: "Implant", time: "10:30 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Surgical post review.", avatarColor: "bg-emerald-100 text-emerald-600" },
+    { id: "appt-5", patientId: "DS-1005", patientName: "Rohan Kumar", doctor: "Dr. Priyanka Mane Pado", treatment: "Crown", time: "11:00 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Crown margins assessment.", avatarColor: "bg-indigo-100 text-indigo-600" }
   ];
 
   const [appointments, setAppointments] = useState<Appointment[]>([]);
@@ -2821,13 +3128,15 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [clinicName, setClinicName] = useState("32 Smiles Dental Clinic");
   const [receptionistUser, setReceptionistUser] = useState("Anjali");
   const [clinicAddress, setClinicAddress] = useState("32 Smiles Dental Clinic, Main Road");
+  const [settingsRecordId, setSettingsRecordId] = useState<string | null>(null);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isReceptionistAccountIdentity, setIsReceptionistAccountIdentity] = useState(false);
 
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [backupHistory, setBackupHistory] = useState<BackupHistoryItem[]>([]);
 
   const fetchBackupHistory = React.useCallback(async () => {
     try {
-      const supabase = createClient();
       const { data, error } = await supabase
         .from("backup_history")
         .select("*")
@@ -2873,17 +3182,19 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   }, []);
 
   useEffect(() => {
-    fetchBackupHistory();
-  }, [fetchBackupHistory]);
+    if (!loadingSession && isOwner) {
+      fetchBackupHistory();
+    }
+  }, [loadingSession, isOwner, fetchBackupHistory]);
 
   useEffect(() => {
     try {
       const savedSettings = localStorage.getItem("clinic_settings");
       if (savedSettings) {
         const parsed = JSON.parse(savedSettings);
-        if (parsed.clinicName) setClinicName(parsed.clinicName);
-        if (parsed.receptionistUser) setReceptionistUser(parsed.receptionistUser);
-        if (parsed.clinicAddress) setClinicAddress(parsed.clinicAddress);
+        if (parsed.clinicName && parsed.clinicName !== "Apex Dental Clinic" && parsed.clinicName !== "V.R. Dental Care") setClinicName(parsed.clinicName);
+        if (parsed.receptionistUser && parsed.receptionistUser !== "Anjali") setReceptionistUser(parsed.receptionistUser);
+        if (parsed.clinicAddress && parsed.clinicAddress !== "12, MG Road, Bengaluru") setClinicAddress(parsed.clinicAddress);
       }
     } catch (e) {}
   }, []);
@@ -2912,7 +3223,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [createdCredentials, setCreatedCredentials] = useState<{ name: string; email: string; pass: string } | null>(null);
 
   const [activities, setActivities] = useState<ActivityItem[]>([
-    { id: "act-1", type: "Register", msg: "Apex Dental database initialized with 15 intake files.", time: "1 hour ago" },
+    { id: "act-1", type: "Register", msg: "Clinic database initialized with 15 intake files.", time: "1 hour ago" },
     { id: "act-2", type: "Appointment", msg: "Aarav Mehta scheduled for Root Canal at 09:00 AM.", time: "45 mins ago" }
   ]);
 
@@ -2922,6 +3233,15 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   ]);
 
   const [treatments, setTreatments] = useState<TreatmentItem[]>([]);
+
+  // Reset active print document state after print dialog closes
+  useEffect(() => {
+    const handleAfterPrint = () => {
+      setActivePrintDoc(null);
+    };
+    window.addEventListener("afterprint", handleAfterPrint);
+    return () => window.removeEventListener("afterprint", handleAfterPrint);
+  }, []);
 
   // --- PATIENT PROFILE FORM SYNC & HANDLERS ---
   useEffect(() => {
@@ -3009,6 +3329,48 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     }
   }, [selectedPatientId, patients, treatments]);
 
+  // Synchronize records from patient_files table when patient is selected
+  useEffect(() => {
+    if (selectedPatientId) {
+      const p = patients.find(pat => pat.id === selectedPatientId);
+      if (p?.uuid) {
+        supabase
+          .from("patient_files")
+          .select("*")
+          .eq("patient_id", p.uuid)
+          .order("created_at", { ascending: false })
+          .then(({ data: dbFiles, error }: any) => {
+            if (!error && dbFiles && dbFiles.length > 0) {
+              setPatients(prev => prev.map(pat => {
+                if (pat.id === selectedPatientId) {
+                  const existing = pat.files || [];
+                  const existingPaths = new Set(existing.map(f => f.storage_path).filter(Boolean));
+                  const newItems: FileAttachment[] = dbFiles
+                    .filter((df: any) => !existingPaths.has(df.storage_path))
+                    .map((df: any) => ({
+                      id: df.id,
+                      name: df.name,
+                      original_name: df.name,
+                      category: df.category || "X-Ray Scan",
+                      type: df.file_type || "application/octet-stream",
+                      size: formatBytes(Number(df.file_size) || 0),
+                      file_size: Number(df.file_size) || 0,
+                      storage_path: df.storage_path,
+                      uploaded_by: df.uploaded_by || "",
+                      created_at: df.created_at
+                    }));
+                  if (newItems.length > 0) {
+                    return { ...pat, files: [...existing, ...newItems] };
+                  }
+                }
+                return pat;
+              }));
+            }
+          });
+      }
+    }
+  }, [selectedPatientId, supabase]);
+
   const handleDobChange = (dobStr: string) => {
     setEditDob(dobStr);
     if (dobStr) {
@@ -3062,24 +3424,25 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
     const oldPatientItem = patients.find(p => p.id === selectedPatientId);
 
-    const { error } = await supabase
-      .from("patients")
-      .update({
-        name: fullName,
-        phone: editMobile.trim(),
-        age: editAge,
-        gender: editGender,
-        address: fullAddress,
-        medical_notes: mergedMedicalNotes,
-        email: editEmail.trim() || null,
-        blood_group: editBloodGroup.trim() || null,
-        notes: clinicalNotes,
-        occupation: editOccupation.trim() || null,
-        reference: editRefDoctor.trim() || null,
-        medical_history: editMedicalHistoryConditions,
-        medical_history_others: editMedicalHistoryOthers.trim() || null
-      })
-      .eq("patient_id", selectedPatientId);
+    const updatePayload = {
+      name: fullName,
+      phone: editMobile.trim(),
+      age: editAge,
+      gender: editGender,
+      address: fullAddress,
+      medical_notes: mergedMedicalNotes,
+      email: editEmail.trim() || null,
+      blood_group: editBloodGroup.trim() || null,
+      notes: clinicalNotes,
+      occupation: editOccupation.trim() || null,
+      reference: editRefDoctor.trim() || null,
+      medical_history: editMedicalHistoryConditions,
+      medical_history_others: editMedicalHistoryOthers.trim() || null
+    };
+
+    const { error } = oldPatientItem?.uuid
+      ? await supabase.from("patients").update(updatePayload).eq("id", oldPatientItem.uuid)
+      : await supabase.from("patients").update(updatePayload).eq("patient_id", selectedPatientId);
 
     if (error) {
       console.error("Patient profile update failed:", error.message, error.code);
@@ -3129,7 +3492,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           notes: editTreatmentAdvised.trim(),
           nextVisit: "",
           prescription: "",
-          date: new Date().toISOString().split("T")[0]
+          date: getTodayKolkataDbDate()
         };
         setTreatments(prev => [...prev, newTreatObj]);
       }
@@ -3183,6 +3546,84 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     showToast("Patient case sheet updated successfully.", "success");
   };
 
+  const handleConfirmDeletePatient = async () => {
+    if (!patientToDelete) return;
+    if (!isOwner) {
+      showToast("Access Denied: Only authenticated clinic owners can delete patient profiles.", "error");
+      return;
+    }
+
+    setIsDeletingPatient(true);
+    const targetPat = patientToDelete;
+
+    try {
+      // 1. Clean associated files in storage buckets if any
+      if (Array.isArray(targetPat.files) && targetPat.files.length > 0) {
+        for (const f of targetPat.files) {
+          const path = (f as any).storage_path || (f as any).path || `${targetPat.id}/${f.name}`;
+          try {
+            await supabase.storage.from("patient-files").remove([path]);
+            await supabase.storage.from("patient-media").remove([path]);
+          } catch (storageErr) {
+            console.warn("Storage cleanup notice:", path, storageErr);
+          }
+        }
+      }
+
+      // Also clean any clinical media state for this patient
+      setPatientMedia(prev => prev.filter(m => m.patientId !== targetPat.id));
+
+      // 2. Remove dependent billing records for this patient
+      if (targetPat.uuid) {
+        await supabase.from("billing").delete().eq("patient_id", targetPat.uuid);
+      }
+      await supabase.from("billing").delete().eq("patient_name", targetPat.name);
+
+      // 3. Delete patient from Supabase (Postgres FK cascades appointments, treatments, dental_chart, prescriptions, clinical_notes, patient_files)
+      let delError: any = null;
+      if (targetPat.uuid) {
+        const { error } = await supabase.from("patients").delete().eq("id", targetPat.uuid);
+        delError = error;
+      } else {
+        const { error } = await supabase.from("patients").delete().eq("patient_id", targetPat.id);
+        delError = error;
+      }
+
+      if (delError) {
+        console.error("Patient delete failed:", delError);
+        showToast(`Failed to delete patient profile: ${delError.message || "Database permission error."}`, "error");
+        setIsDeletingPatient(false);
+        return;
+      }
+
+      // 4. Log deletion in activities
+      await supabase.from("activities").insert({
+        action: "Delete",
+        entity_type: "Patient",
+        description: `Deleted patient ${targetPat.name} (OP: ${targetPat.id}).`
+      });
+
+      // 5. Update local React state
+      setPatients(prev => prev.filter(p => p.id !== targetPat.id && (!targetPat.uuid || p.uuid !== targetPat.uuid)));
+      setAppointments(prev => prev.filter(a => a.patientId !== targetPat.id));
+      setTreatments(prev => prev.filter(t => t.patient !== targetPat.name));
+      setInvoices(prev => prev.filter(inv => inv.patientId !== targetPat.id && inv.patientName !== targetPat.name));
+
+      if (selectedPatientId === targetPat.id) {
+        setSelectedPatientId(null);
+        setProfileSubTab("Case Sheet");
+      }
+
+      showToast(`Patient ${targetPat.name} (${targetPat.id}) was permanently deleted.`, "success");
+      setPatientToDelete(null);
+    } catch (err: any) {
+      console.error("Unexpected error during patient deletion:", err);
+      showToast(`Error deleting patient: ${err?.message || "Unknown error"}`, "error");
+    } finally {
+      setIsDeletingPatient(false);
+    }
+  };
+
   const handleChartToothSelect = async (toothIndex: number) => {
     if (activeTreatment) {
       const patientItem = patients.find(p => p.id === selectedPatientId);
@@ -3194,8 +3635,16 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       const toothObj = ALL_TEETH.find(t => t.index === toothIndex);
       const fdi = toothObj?.fdi || toothIndex;
 
-      const activeItemStr = `${activeTreatment} (Planned)`;
-      const existingIdx = existingList.findIndex(t => t.toLowerCase().startsWith(activeTreatment.toLowerCase()));
+      const parsedActive = parseTreatmentEntry(activeTreatment);
+      const activeItemStr = buildTreatmentEntryString(parsedActive.category, parsedActive.subTreatment, "Planned");
+      const existingIdx = existingList.findIndex(t => {
+        const p = parseTreatmentEntry(t);
+        if (parsedActive.subTreatment) {
+          return p.category.toLowerCase() === parsedActive.category.toLowerCase() &&
+                 p.subTreatment?.toLowerCase() === parsedActive.subTreatment.toLowerCase();
+        }
+        return p.category.toLowerCase() === parsedActive.category.toLowerCase();
+      });
 
       let newList: string[];
       if (existingIdx !== -1) {
@@ -3248,7 +3697,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       setChartDoctor(doctors[0].name);
     }
     if (!chartDate) {
-      setChartDate(new Date().toISOString().split("T")[0]);
+      setChartDate(getTodayKolkataDbDate());
     }
   };
 
@@ -3487,9 +3936,11 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     const costAmt = Number(newTrCost) || 0;
 
     if (toothNum) {
+      const parsed = parseTreatmentEntry(newTrName);
+      const entryFormatted = buildTreatmentEntryString(parsed.category, parsed.subTreatment, newTrStatus);
       const updatedChart = {
         ...(patientItem.dentalChart || {}),
-        [toothNum]: `${newTrName.trim()} (${newTrStatus})`
+        [toothNum]: entryFormatted
       };
 
       const { error: patChartErr } = await supabase
@@ -3544,7 +3995,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       cost: costAmt,
       diagnosis: newTrDiagnosis.trim() || null,
       notes: newTrNotes.trim() || null,
-      treatment_date: new Date().toISOString().split("T")[0]
+      treatment_date: getTodayKolkataDbDate()
     };
 
     const { data: insertedTreatment, error: treatInsErr } = await supabase
@@ -3776,6 +4227,28 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       return p;
     }));
 
+    const newStructuredPresc: PatientPrescriptionRecord = {
+      id: `presc-${Date.now()}`,
+      patient_id: patientItem.id,
+      patient_name: patientItem.name,
+      doctor_name: docName,
+      prescription_date: prescDate || new Date().toISOString().slice(0, 10),
+      diagnosis: prescDiagnosis,
+      advice: prescAdvice,
+      items: prescMeds.map(m => ({
+        medicine_name: m.name,
+        dosage: m.dosage,
+        freq: m.freq,
+        duration: m.duration,
+        instructions: m.instructions,
+        dispensing_quantity: 10,
+        stock_unit: (m as any).stock_unit || "tablets",
+        dispensed: false
+      })),
+      created_at: new Date().toISOString()
+    };
+    setPatientPrescriptionsList(prev => [newStructuredPresc, ...prev]);
+
     setPrescMeds([{ name: "", dosage: "", freq: "", duration: "", instructions: "" }]);
     setPrescAdvice("");
     setPrescDiagnosis("");
@@ -3787,10 +4260,52 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     showToast("Prescription generated and saved.", "success");
   };
 
-  const handlePrintPrescription = () => {
+  const parsePrescriptionString = (str: string): { name: string; dosage: string; duration: string; instructions: string } => {
+    let name = str;
+    let dosage = "";
+    let duration = "";
+    let instructions = "";
+
+    const instrMatch = str.match(/\[(.*?)\]/);
+    if (instrMatch) {
+      instructions = instrMatch[1];
+      str = str.replace(/\[(.*?)\]/, "").trim();
+    }
+
+    const durMatch = str.match(/for\s+(.*?)$/i);
+    if (durMatch) {
+      duration = durMatch[1].trim();
+      str = str.replace(/for\s+(.*?)$/i, "").trim();
+    }
+
+    const doseMatch = str.match(/\((.*?)\)/);
+    if (doseMatch) {
+      dosage = doseMatch[1].trim();
+      name = str.replace(/\((.*?)\)/, "").trim();
+    }
+
+    return { name, dosage, duration, instructions };
+  };
+
+  const handlePrintPrescription = (customData?: {
+    doctorName?: string;
+    date?: string;
+    diagnosis?: string;
+    medicines: Array<{ name: string; dosage: string; duration: string; instructions: string; strength?: string }>;
+    advice?: string;
+  }) => {
     const patientItem = patients.find(p => p.id === selectedPatientId);
     if (!patientItem) {
       showToast("Please select a patient before printing a prescription.", "error");
+      return;
+    }
+
+    if (customData) {
+      setActivePrintPrescription(customData);
+      setActivePrintDoc("prescription");
+      setTimeout(() => {
+        window.print();
+      }, 50);
       return;
     }
 
@@ -3809,7 +4324,158 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       return;
     }
 
-    window.print();
+    setActivePrintPrescription({
+      doctorName: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+      date: prescDate,
+      diagnosis: prescDiagnosis,
+      medicines: prescMeds.filter(m => m.name.trim()),
+      advice: prescAdvice,
+    });
+    setActivePrintDoc("prescription");
+    setTimeout(() => {
+      window.print();
+    }, 50);
+  };
+
+  const handleDownloadPrescriptionPDF = async (customData?: {
+    doctorName?: string;
+    date?: string;
+    diagnosis?: string;
+    medicines: Array<{ name: string; dosage: string; duration: string; instructions: string; strength?: string }>;
+    advice?: string;
+  }) => {
+    const patientItem = patients.find(p => p.id === selectedPatientId);
+    if (!patientItem) {
+      showToast("Please select a patient before generating a prescription PDF.", "error");
+      return;
+    }
+
+    const medsToUse = customData?.medicines || prescMeds.filter(m => m.name.trim());
+    if (medsToUse.length === 0) {
+      showToast("Please enter at least one medicine before downloading.", "error");
+      return;
+    }
+
+    try {
+      await generateAndDownloadPrescriptionPdf({
+        patient: patientItem,
+        doctorName: customData?.doctorName || prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+        date: customData?.date || prescDate,
+        diagnosis: customData?.diagnosis || prescDiagnosis,
+        medicines: medsToUse,
+        advice: customData?.advice || prescAdvice,
+        parseDosageFn: parseDosageString,
+      });
+      showToast("Prescription PDF downloaded successfully.", "success");
+    } catch (err) {
+      console.error("PDF download error:", err);
+      showToast("Failed to generate PDF.", "error");
+    }
+  };
+
+  const handlePrintCaseSheet = async () => {
+    const patientItem = patients.find(p => p.id === selectedPatientId);
+    if (!patientItem) {
+      showToast("Please select a patient before printing Case Sheet.", "error");
+      return;
+    }
+
+    try {
+      // 1. Ensure the background case sheet template image is preloaded in browser memory
+      const templateUrl = getAssetPath("/vrcasesheet.jpeg");
+      const img = new Image();
+      img.src = templateUrl;
+      if (!img.complete) {
+        await new Promise<void>((resolve) => {
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+        });
+      }
+
+      // 2. Ensure web fonts and document layout have decoded completely
+      if (typeof document !== "undefined" && document.fonts) {
+        await document.fonts.ready;
+      }
+
+      // 3. Set print document state to "casesheet"
+      setActivePrintDoc("casesheet");
+
+      // 4. Delay slightly to allow React to flush state and DOM updates before opening print dialog
+      setTimeout(() => {
+        window.print();
+      }, 100);
+    } catch (err) {
+      console.error("Print case sheet error:", err);
+      setActivePrintDoc("casesheet");
+      window.print();
+    }
+  };
+
+  const handleDownloadCaseSheetPDF = async () => {
+    const patientItem = patients.find(p => p.id === selectedPatientId);
+    if (!patientItem) {
+      showToast("Please select a patient before generating a Case Sheet PDF.", "error");
+      return;
+    }
+
+    try {
+      await generateAndDownloadCaseSheetPdf({
+        patient: patientItem,
+        medicalHistoryConditions: editMedicalHistoryConditions,
+        medicalHistoryOthers: editMedicalHistoryOthers,
+        currentMedications: editCurrentMedications,
+        chiefComplaint: editChiefComplaint,
+        intraOralExam: editIntraOralExam,
+        provisionalDiagnosis: editProvisionalDiagnosis,
+        treatmentAdvised: formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised,
+        visitDate: patientItem.visit || patientItem.firstVisit,
+      });
+      showToast("Case Sheet PDF downloaded successfully.", "success");
+    } catch (err) {
+      console.error("PDF download error:", err);
+      showToast("Failed to generate Case Sheet PDF.", "error");
+    }
+  };
+
+  const handlePrintInvoice = async (invoiceToPrint?: InvoiceItem | null) => {
+    const inv = invoiceToPrint || lastGeneratedReceipt;
+    if (!inv) {
+      showToast("No invoice selected to print.", "error");
+      return;
+    }
+
+    try {
+      // 1. Ensure the background letterhead template image is preloaded in browser memory
+      const letterheadUrl = getAssetPath("/vr_letterhead.png");
+      const img = new Image();
+      img.src = letterheadUrl;
+      if (!img.complete) {
+        await new Promise<void>((resolve) => {
+          img.onload = () => resolve();
+          img.onerror = () => resolve();
+        });
+      }
+
+      // 2. Ensure web fonts and document layout have decoded completely
+      if (typeof document !== "undefined" && document.fonts) {
+        await document.fonts.ready;
+      }
+
+      // 3. Ensure receipt state is set so #print-area is populated in the DOM
+      if (inv !== lastGeneratedReceipt) {
+        setLastGeneratedReceipt(inv);
+      }
+      setActivePrintDoc("invoice");
+
+      // 4. Delay slightly to allow React to flush state and DOM updates before opening print dialog
+      setTimeout(() => {
+        window.print();
+      }, 100);
+    } catch (err) {
+      console.error("Print invoice error:", err);
+      setActivePrintDoc("invoice");
+      window.print();
+    }
   };
 
   const handleSaveClinicalNote = async (e: React.FormEvent) => {
@@ -3884,8 +4550,8 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       total,
       paidAmount: paid,
       status: pending === 0 ? "Paid" : paid > 0 ? "Partially Paid" : "Pending",
-      paymentDate: paid > 0 ? new Date().toISOString().split("T")[0] : "",
-      paymentLogs: paid > 0 ? [{ method: invMode, amount: paid, date: new Date().toISOString().split("T")[0] }] : []
+      paymentDate: paid > 0 ? getTodayKolkataDbDate() : "",
+      paymentLogs: paid > 0 ? [{ method: invMode, amount: paid, date: getTodayKolkataDbDate() }] : []
     };
 
     setInvoices(prev => [...prev, newInvoice]);
@@ -3907,54 +4573,393 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     showToast("Invoice saved successfully.", "success");
   };
 
-  const handleUploadFile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newFileName.trim()) {
-      showToast("File name is required.", "error");
+  const handleSaveMultiTreatmentInvoice = async (e?: React.FormEvent, targetPatientId?: string) => {
+    if (e) e.preventDefault();
+    const pid = targetPatientId || selectedPatientId || globalInvoicePatientId;
+    const patientItem = patients.find(p => p.id === pid);
+
+    if (!patientItem) {
+      showToast("Please select a patient for this invoice.", "error");
       return;
     }
+
+    const validRows = invoiceTreatmentRows.filter(r => r.description && r.description.trim().length > 0);
+    if (validRows.length === 0) {
+      showToast("Please add at least one treatment / procedure to the invoice.", "error");
+      return;
+    }
+
+    const invId = (invoiceCustomId && invoiceCustomId.trim().length > 0) ? invoiceCustomId.trim() : getNextInvoiceId();
+    const { subtotal, discountAmount, totalPayable, paid, balanceDue } = calculateInvoiceFormValues();
+
+    setIsSavingMultiInvoice(true);
+
+    const status: "Paid" | "Partially Paid" | "Pending" =
+      balanceDue === 0 && totalPayable > 0 && paid >= totalPayable
+        ? "Paid"
+        : paid > 0
+        ? "Partially Paid"
+        : "Pending";
+
+    const treatmentSummary = validRows.map(r => r.description.trim()).join(", ");
+    const itemsFormatted = validRows.map(r => {
+      const q = Number(r.quantity) || 1;
+      const up = Number(r.unitPrice) || ((Number(r.amount) || 0) / q);
+      const amt = Number(r.amount) || (q * up);
+      return {
+        description: r.description.trim(),
+        quantity: q,
+        unitPrice: up,
+        amount: amt,
+      };
+    });
+
+    const newInvoice: InvoiceItem = {
+      id: invId,
+      patientId: patientItem.id,
+      patientName: patientItem.name,
+      doctor: invoiceDoctor || doctors[0]?.name || "Dr. Deepa Kodali",
+      treatment: treatmentSummary,
+      items: itemsFormatted,
+      discount: invoiceDiscountType === "percentage" ? (Number(invoiceDiscountValue) || 0) : Math.round((discountAmount / (subtotal || 1)) * 100),
+      discountType: invoiceDiscountType,
+      discountValue: Number(invoiceDiscountValue) || 0,
+      tax: 0,
+      subtotal,
+      total: totalPayable,
+      paidAmount: paid,
+      status,
+      paymentDate: paid > 0 ? getTodayKolkataDbDate() : "",
+      paymentLogs: paid > 0 ? [{ method: invoicePaymentMode, amount: paid, date: getTodayKolkataDbDate() }] : []
+    };
+
+    setInvoices(prev => [newInvoice, ...prev.filter(i => i.id !== newInvoice.id)]);
+    await insertBillingRecord(newInvoice);
+
+    if (balanceDue === 0) {
+      await supabase
+        .from("patients")
+        .update({ balance: "₹0" })
+        .eq("patient_id", patientItem.id);
+      setPatients(prev => prev.map(p => p.id === patientItem.id ? { ...p, balance: "₹0" } : p));
+    }
+
+    setActivities(prev => [{
+      id: `act-${Date.now()}`,
+      type: "Billing",
+      msg: `Invoice ${invId} generated for ${patientItem.name} (₹${totalPayable.toLocaleString()}).`,
+      time: "Just now"
+    }, ...prev]);
+
+    setIsSavingMultiInvoice(false);
+    showToast(`Invoice ${invId} saved & generated successfully!`, "success");
+
+    // Close global creation modal if open
+    setIsGlobalCreateInvoiceModalOpen(false);
+
+    // Open Official Letterhead Preview Modal
+    setLastGeneratedReceipt(newInvoice);
+
+    // Reset multi treatment form for next invoice
+    resetMultiTreatmentForm();
+  };
+
+  // --- REAL PATIENT FILES UPLOAD, PREVIEW, DOWNLOAD & DELETE HANDLERS ---
+  const handleUploadFile = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!selectedUploadFile) {
+      showToast("Please choose a file to upload from your computer.", "error");
+      return;
+    }
+
+    const patientItem = patients.find(p => p.id === selectedPatientId);
+    if (!patientItem) {
+      showToast("No active patient selected.", "error");
+      return;
+    }
+
+    // 1. Storage limit check (Max 25 MB)
+    const MAX_FILE_SIZE = 25 * 1024 * 1024;
+    if (selectedUploadFile.size > MAX_FILE_SIZE) {
+      showToast("File size exceeds 25 MB limit. Please select a smaller scan or document.", "error");
+      return;
+    }
+
+    // 2. File type validation
+    const allowedMimes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp",
+      "image/gif",
+      "image/svg+xml",
+      "application/pdf",
+      "application/dicom",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "text/plain"
+    ];
+    const fileExt = selectedUploadFile.name.split(".").pop()?.toLowerCase() || "";
+    const isMimeAllowed = !selectedUploadFile.type || allowedMimes.includes(selectedUploadFile.type);
+    const isExtAllowed = ["jpg", "jpeg", "png", "webp", "pdf", "dcm", "dicom", "doc", "docx", "txt"].includes(fileExt);
+
+    if (!isMimeAllowed && !isExtAllowed) {
+      showToast("Unsupported file format. Please upload an image, scan, PDF, or approved medical doc.", "error");
+      return;
+    }
+
+    setIsUploadingFile(true);
+
+    try {
+      // 3. Unique storage path per patient: patient_id/timestamp_sanitized_name
+      const patientFolder = patientItem.uuid || patientItem.id || "unassigned";
+      const timestamp = Date.now();
+      const sanitizedName = selectedUploadFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `${patientFolder}/${timestamp}_${sanitizedName}`;
+
+      // 4. Upload binary to private Supabase storage bucket 'patient-files'
+      const { data: storageData, error: storageErr } = await supabase.storage
+        .from("patient-files")
+        .upload(storagePath, selectedUploadFile, {
+          cacheControl: "3600",
+          upsert: false
+        });
+
+      if (storageErr) {
+        console.error("Storage binary upload failed:", storageErr);
+        showToast(`Storage upload failed: ${storageErr.message || "Access denied or network issue"}`, "error");
+        setIsUploadingFile(false);
+        return;
+      }
+
+      // 5. Construct metadata record
+      const originalName = selectedUploadFile.name;
+      const displayName = newFileName.trim() ? newFileName.trim() : originalName;
+      const fileId = typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `pf_${timestamp}`;
+
+      const newFileRecord: FileAttachment = {
+        id: fileId,
+        name: displayName,
+        original_name: originalName,
+        size: formatBytes(selectedUploadFile.size),
+        file_size: selectedUploadFile.size,
+        type: selectedUploadFile.type || (fileExt === "pdf" ? "application/pdf" : "image/jpeg"),
+        category: newFileType,
+        storage_path: storagePath,
+        uploaded_by: currentUserName || (isOwner ? "Owner / Dentist" : "Receptionist"),
+        created_at: new Date().toISOString()
+      };
+
+      const updatedFiles = [newFileRecord, ...(patientItem.files || [])];
+
+      // 6. Dual sync: Update patients table files JSON column
+      const { error: patientErr } = await supabase
+        .from("patients")
+        .update({ files: updatedFiles })
+        .eq(patientItem.uuid ? "id" : "patient_id", patientItem.uuid || selectedPatientId);
+
+      if (patientErr) {
+        console.error("Failed to update patient files record:", patientErr);
+        // Rollback storage object on database update failure to avoid orphaned files
+        await supabase.storage.from("patient-files").remove([storagePath]);
+        showToast("Failed to link file metadata to patient record.", "error");
+        setIsUploadingFile(false);
+        return;
+      }
+
+      // 7. Dual sync: Also insert into patient_files table if patient UUID exists
+      if (patientItem.uuid) {
+        try {
+          const { error: pfTableErr } = await supabase.from("patient_files").insert({
+            id: fileId,
+            patient_id: patientItem.uuid,
+            name: displayName,
+            file_type: selectedUploadFile.type || (fileExt === "pdf" ? "application/pdf" : "image/jpeg"),
+            category: newFileType,
+            storage_path: storagePath,
+            file_size: selectedUploadFile.size,
+            uploaded_by: currentUserId || null
+          });
+          if (pfTableErr) {
+            console.warn("patient_files table insert notice:", pfTableErr.message);
+          }
+        } catch (tableErr) {
+          console.warn("patient_files table insert error:", tableErr);
+        }
+      }
+
+      // 8. Update in-memory state
+      setPatients(prev => prev.map(p => {
+        if (p.id === selectedPatientId) {
+          return {
+            ...p,
+            files: updatedFiles
+          };
+        }
+        return p;
+      }));
+
+      // 9. Reset form
+      setSelectedUploadFile(null);
+      setNewFileName("");
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+
+      showToast(`"${displayName}" uploaded and saved to secure storage.`, "success");
+    } catch (err: any) {
+      console.error("Upload handler exception:", err);
+      showToast(err.message || "An unexpected error occurred during file upload.", "error");
+    } finally {
+      setIsUploadingFile(false);
+    }
+  };
+
+  const handleDownloadFile = async (file: FileAttachment) => {
+    try {
+      if (!file.storage_path) {
+        showToast(`Cannot download mock record without binary data (${file.name}).`, "error");
+        return;
+      }
+
+      const { data, error } = await supabase.storage
+        .from("patient-files")
+        .createSignedUrl(file.storage_path, 3600);
+
+      if (error || !data?.signedUrl) {
+        console.error("Signed URL creation failed:", error);
+        showToast("Failed to generate secure download link from storage.", "error");
+        return;
+      }
+
+      const a = document.createElement("a");
+      a.href = data.signedUrl;
+      a.download = file.original_name || file.name;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+
+      showToast(`Initiating download: ${file.name}`, "success");
+    } catch (err: any) {
+      console.error("Download error:", err);
+      showToast("Error downloading patient file.", "error");
+    }
+  };
+
+  const handlePreviewFile = async (file: FileAttachment) => {
+    try {
+      if (!file.storage_path) {
+        showToast(`Preview not available for mock item (${file.name}).`, "error");
+        return;
+      }
+
+      const { data, error } = await supabase.storage
+        .from("patient-files")
+        .createSignedUrl(file.storage_path, 3600);
+
+      if (error || !data?.signedUrl) {
+        console.error("Preview URL creation failed:", error);
+        showToast("Failed to generate secure preview link.", "error");
+        return;
+      }
+
+      const mime = (file.type || "").toLowerCase();
+      const ext = (file.name || "").split(".").pop()?.toLowerCase() || "";
+      const isPdf = mime === "application/pdf" || ext === "pdf";
+      const isImg = mime.startsWith("image/") || ["jpg", "jpeg", "png", "webp", "gif", "svg"].includes(ext);
+
+      if (isPdf) {
+        setFilePreviewModal({
+          open: true,
+          name: file.name,
+          url: data.signedUrl,
+          type: "application/pdf",
+          category: file.category
+        });
+      } else if (isImg) {
+        setFilePreviewModal({
+          open: true,
+          name: file.name,
+          url: data.signedUrl,
+          type: "image",
+          category: file.category
+        });
+      } else {
+        // Fallback to direct download for other file types (e.g. DICOM, DOCX)
+        await handleDownloadFile(file);
+      }
+    } catch (err: any) {
+      console.error("Preview error:", err);
+      showToast("Error loading file preview.", "error");
+    }
+  };
+
+  const confirmDeleteFile = async () => {
+    if (!fileToDelete) return;
+    const { file, index } = fileToDelete;
     const patientItem = patients.find(p => p.id === selectedPatientId);
     if (!patientItem) return;
 
-    const newFile = {
-      name: newFileName.trim(),
-      size: "2.4 MB",
-      type: newFileType
-    };
+    setIsDeletingFile(true);
+    try {
+      // 1. Remove binary object from Supabase Storage
+      if (file.storage_path) {
+        const { error: storageDelErr } = await supabase.storage
+          .from("patient-files")
+          .remove([file.storage_path]);
 
-    const updatedFiles = [...(patientItem.files || []), newFile];
-
-    const { error: fileErr } = await supabase
-      .from("patients")
-      .update({ files: updatedFiles })
-      .eq("patient_id", selectedPatientId);
-
-    if (fileErr) {
-      showToast("Failed to save file attachment to database.", "error");
-      return;
-    }
-
-    setPatients(prev => prev.map(p => {
-      if (p.id === selectedPatientId) {
-        return {
-          ...p,
-          files: updatedFiles
-        };
+        if (storageDelErr) {
+          console.warn("Storage deletion warning:", storageDelErr.message);
+        }
       }
-      return p;
-    }));
 
-    setNewFileName("");
-    showToast("File uploaded and linked successfully.", "success");
+      // 2. Delete row from patient_files table if exists
+      if (file.id || file.storage_path) {
+        try {
+          if (file.id) {
+            await supabase.from("patient_files").delete().eq("id", file.id);
+          } else if (file.storage_path) {
+            await supabase.from("patient_files").delete().eq("storage_path", file.storage_path);
+          }
+        } catch (tableErr) {
+          console.warn("patient_files table delete notice:", tableErr);
+        }
+      }
+
+      // 3. Update patients.files JSON column
+      const updatedFiles = (patientItem.files || []).filter((_, i) => i !== index);
+      const { error: patientErr } = await supabase
+        .from("patients")
+        .update({ files: updatedFiles })
+        .eq(patientItem.uuid ? "id" : "patient_id", patientItem.uuid || selectedPatientId);
+
+      if (patientErr) {
+        showToast("Failed to update patient record.", "error");
+        setIsDeletingFile(false);
+        return;
+      }
+
+      // 4. Update in-memory state
+      setPatients(prev => prev.map(p => p.id === selectedPatientId ? { ...p, files: updatedFiles } : p));
+      showToast(`File "${file.name}" deleted successfully.`, "success");
+      setFileToDelete(null);
+    } catch (err: any) {
+      console.error("File deletion error:", err);
+      showToast("Failed to delete patient file.", "error");
+    } finally {
+      setIsDeletingFile(false);
+    }
   };
 
-  // --- MEDICINE INVENTORY ACTION HANDLERS ---
+  // --- MEDICINE CATALOGUE ACTION HANDLERS ---
   const handleOpenAddMedicine = () => {
     setEditingMedicine(null);
     setMedFormName("");
+    setMedFormCategory("Tablets / Capsules");
+    setMedFormDosageForm("Tablet");
     setMedFormUnit("tablets");
-    setMedFormOpeningStock("");
-    setMedFormThreshold("5");
     setMedFormIsActive(true);
     setMedicineModalOpen(true);
   };
@@ -3962,9 +4967,9 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const handleOpenEditMedicine = (med: MedicineItem) => {
     setEditingMedicine(med);
     setMedFormName(med.name);
-    setMedFormUnit(med.stock_unit);
-    setMedFormOpeningStock(med.opening_stock !== null && med.opening_stock !== undefined ? String(med.opening_stock) : "");
-    setMedFormThreshold(String(med.low_stock_threshold || 5));
+    setMedFormCategory(med.category || getCategoryForMedicine(med.name));
+    setMedFormDosageForm(med.dosage_form || "Tablet");
+    setMedFormUnit(med.stock_unit || "tablets");
     setMedFormIsActive(med.is_active);
     setMedicineModalOpen(true);
   };
@@ -3972,7 +4977,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const handleSaveMedicine = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isOwner) {
-      showToast("Unauthorized: Only clinic owners can manage medicine stock.", "error");
+      showToast("Unauthorized: Only clinic owners can manage medicine catalogue.", "error");
       return;
     }
     const cleanName = medFormName.trim();
@@ -3981,43 +4986,15 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       return;
     }
 
-    const thresholdVal = Number(medFormThreshold);
-    if (isNaN(thresholdVal) || thresholdVal <= 0) {
-      showToast("Low-stock threshold must be greater than zero.", "error");
-      return;
-    }
-
-    let openingQtyNum: number | null = null;
-    if (medFormOpeningStock.trim() !== "") {
-      const parsed = Number(medFormOpeningStock.trim());
-      if (isNaN(parsed) || parsed < 0) {
-        showToast("Opening stock quantity cannot be negative.", "error");
-        return;
-      }
-      openingQtyNum = parsed;
-    }
-
     if (editingMedicine) {
-      const hasTx = stockTransactions.some(t => t.medicine_id === editingMedicine.id);
-      if (hasTx && editingMedicine.stock_unit !== medFormUnit) {
-        showToast(`Cannot change unit of "${editingMedicine.name}" while stock transactions exist. Make a stock adjustment instead.`, "error");
-        return;
-      }
-
-      const isNewlyConfigured = !editingMedicine.is_configured && openingQtyNum !== null;
-      const newAvailQty = isNewlyConfigured ? openingQtyNum : (openingQtyNum !== null && editingMedicine.available_quantity === null ? openingQtyNum : editingMedicine.available_quantity);
-      const isConfig = editingMedicine.is_configured || openingQtyNum !== null;
-
       const { error } = await supabase
         .from("medicines")
         .update({
           name: cleanName,
-          stock_unit: medFormUnit,
-          opening_stock: openingQtyNum !== null ? openingQtyNum : editingMedicine.opening_stock,
-          available_quantity: newAvailQty,
-          low_stock_threshold: thresholdVal,
+          category: medFormCategory,
+          dosage_form: medFormDosageForm,
+          stock_unit: medFormUnit || "tablets",
           is_active: medFormIsActive,
-          is_configured: isConfig
         })
         .eq("id", editingMedicine.id);
 
@@ -4028,37 +5005,11 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       setMedicines(prev => prev.map(m => m.id === editingMedicine.id ? {
         ...m,
         name: cleanName,
-        stock_unit: medFormUnit,
-        opening_stock: openingQtyNum !== null ? openingQtyNum : m.opening_stock,
-        available_quantity: newAvailQty,
-        low_stock_threshold: thresholdVal,
+        category: medFormCategory,
+        dosage_form: medFormDosageForm,
+        stock_unit: medFormUnit || "tablets",
         is_active: medFormIsActive,
-        is_configured: isConfig
       } : m));
-
-      if (isNewlyConfigured && openingQtyNum !== null) {
-        const txRecord: StockTransaction = {
-          id: `tx-${Date.now()}`,
-          medicine_id: editingMedicine.id,
-          transaction_type: "opening_stock",
-          quantity: openingQtyNum,
-          previous_quantity: 0,
-          new_quantity: openingQtyNum,
-          transaction_date: new Date().toISOString(),
-          reference: "INITIAL_SETUP",
-          notes: "Opening stock configured"
-        };
-        await supabase.from("stock_transactions").insert({
-          medicine_id: editingMedicine.id,
-          transaction_type: "opening_stock",
-          quantity: openingQtyNum,
-          previous_quantity: 0,
-          new_quantity: openingQtyNum,
-          reference: "INITIAL_SETUP",
-          notes: "Opening stock configured"
-        });
-        setStockTransactions(prev => [txRecord, ...prev]);
-      }
 
       showToast(`Medicine "${cleanName}" updated successfully.`, "success");
     } else {
@@ -4068,29 +5019,30 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         return;
       }
 
-      const isConfig = openingQtyNum !== null;
       const newMedId = `med-${Date.now()}`;
       const newMedItem: MedicineItem = {
         id: newMedId,
         name: cleanName,
-        stock_unit: medFormUnit,
-        opening_stock: openingQtyNum,
-        available_quantity: openingQtyNum,
-        low_stock_threshold: thresholdVal,
+        category: medFormCategory,
+        dosage_form: medFormDosageForm,
+        stock_unit: medFormUnit || "tablets",
+        opening_stock: null,
+        available_quantity: null,
+        low_stock_threshold: 5,
         is_active: medFormIsActive,
-        is_configured: isConfig
+        is_configured: false,
       };
 
       const { data: dbIns, error } = await supabase
         .from("medicines")
         .insert({
           name: cleanName,
-          stock_unit: medFormUnit,
-          opening_stock: openingQtyNum,
-          available_quantity: openingQtyNum,
-          low_stock_threshold: thresholdVal,
+          category: medFormCategory,
+          dosage_form: medFormDosageForm,
+          stock_unit: medFormUnit || "tablets",
+          low_stock_threshold: 5,
           is_active: medFormIsActive,
-          is_configured: isConfig
+          is_configured: false,
         })
         .select()
         .maybeSingle();
@@ -4098,41 +5050,18 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       const createdMed = dbIns ? {
         id: dbIns.id,
         name: dbIns.name,
-        stock_unit: dbIns.stock_unit,
+        category: dbIns.category || medFormCategory,
+        dosage_form: dbIns.dosage_form || medFormDosageForm,
+        stock_unit: dbIns.stock_unit || medFormUnit || "tablets",
         opening_stock: dbIns.opening_stock !== null ? Number(dbIns.opening_stock) : null,
         available_quantity: dbIns.available_quantity !== null ? Number(dbIns.available_quantity) : null,
-        low_stock_threshold: Number(dbIns.low_stock_threshold),
-        is_active: dbIns.is_active,
-        is_configured: dbIns.is_configured
+        low_stock_threshold: Number(dbIns.low_stock_threshold || 5),
+        is_active: dbIns.is_active ?? true,
+        is_configured: dbIns.is_configured ?? false,
       } : newMedItem;
 
-      setMedicines(prev => [...prev, createdMed]);
-
-      if (isConfig && openingQtyNum !== null) {
-        const txRecord: StockTransaction = {
-          id: `tx-${Date.now()}`,
-          medicine_id: createdMed.id,
-          transaction_type: "opening_stock",
-          quantity: openingQtyNum,
-          previous_quantity: 0,
-          new_quantity: openingQtyNum,
-          transaction_date: new Date().toISOString(),
-          reference: "INITIAL_SETUP",
-          notes: "Opening stock configured"
-        };
-        await supabase.from("stock_transactions").insert({
-          medicine_id: createdMed.id,
-          transaction_type: "opening_stock",
-          quantity: openingQtyNum,
-          previous_quantity: 0,
-          new_quantity: openingQtyNum,
-          reference: "INITIAL_SETUP",
-          notes: "Opening stock configured"
-        });
-        setStockTransactions(prev => [txRecord, ...prev]);
-      }
-
-      showToast(`Medicine "${cleanName}" added to inventory catalogue.`, "success");
+      setMedicines(prev => [createdMed, ...prev]);
+      showToast(`Medicine "${cleanName}" added to catalogue.`, "success");
     }
 
     setMedicineModalOpen(false);
@@ -4141,7 +5070,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const handleOpenAddStock = (med: MedicineItem) => {
     setSelectedStockMedicine(med);
     setAddStockQty("");
-    setAddStockDate(new Date().toISOString().split("T")[0]);
+    setAddStockDate(getTodayKolkataDbDate());
     setAddStockSupplier("");
     setAddStockNotes("");
     setAddStockModalOpen(true);
@@ -4216,7 +5145,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     setAdjustStockMedicine(med);
     setAdjustStockNewQty(med.available_quantity !== null ? String(med.available_quantity) : "");
     setAdjustStockReason("");
-    setAdjustStockDate(new Date().toISOString().split("T")[0]);
+    setAdjustStockDate(getTodayKolkataDbDate());
     setAdjustStockModalOpen(true);
   };
 
@@ -4381,6 +5310,251 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     setDispenseConfirmModal(null);
   };
 
+  // --- TREATMENT CATALOGUE ACTION HANDLERS ---
+  const persistTreatmentCatalogue = async (updatedList: TreatmentCategoryDef[]) => {
+    setTreatmentCategories(updatedList);
+    setDynamicCatalogue(updatedList);
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem("dentpro_treatment_catalogue", JSON.stringify(updatedList));
+      } catch (err) {
+        console.warn("Error storing treatment catalogue in localStorage:", err);
+      }
+    }
+
+    try {
+      const payload = updatedList.map((cat, idx) => ({
+        id: cat.id,
+        name: cat.name,
+        display_name: cat.displayName || cat.name,
+        color_key: cat.colorKey,
+        color_dot: cat.colorDot,
+        color_badge: cat.colorBadge,
+        color_tooth: cat.colorTooth,
+        sub_treatments: cat.subTreatments || [],
+        aliases: cat.aliases || [],
+        sort_order: cat.sortOrder ?? idx + 1,
+        is_active: cat.isActive ?? true,
+        updated_at: new Date().toISOString()
+      }));
+
+      const { error } = await supabase.from("treatment_categories").upsert(payload, { onConflict: "id" });
+      if (error) {
+        console.warn("Supabase treatment_categories upsert notice:", error.message);
+      }
+    } catch (err) {
+      console.warn("Database sync notice (localStorage fallback preserved):", err);
+    }
+  };
+
+  const deleteCategoryFromDb = async (categoryId: string) => {
+    try {
+      const { error } = await supabase.from("treatment_categories").delete().eq("id", categoryId);
+      if (error) {
+        console.warn("Supabase treatment_categories delete notice:", error.message);
+      }
+    } catch (err) {
+      console.warn("Database delete error:", err);
+    }
+  };
+
+  const handleOpenAddCategory = () => {
+    if (!isOwner) {
+      showToast("Only clinic owners and dentists can manage the treatment catalogue.", "error");
+      return;
+    }
+    setEditingCategory(null);
+    setCatFormName("");
+    setCatFormColorKey("Blue");
+    setCategoryModalOpen(true);
+  };
+
+  const handleOpenEditCategory = (cat: TreatmentCategoryDef) => {
+    if (!isOwner) {
+      showToast("Only clinic owners and dentists can manage the treatment catalogue.", "error");
+      return;
+    }
+    setEditingCategory(cat);
+    setCatFormName(cat.name);
+    setCatFormColorKey(cat.colorKey || "Blue");
+    setCategoryModalOpen(true);
+  };
+
+  const handleSaveCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isOwner) {
+      showToast("Only clinic owners and dentists can manage the treatment catalogue.", "error");
+      return;
+    }
+    const cleanName = catFormName.trim();
+    if (!cleanName) {
+      showToast("Please enter a category name.", "error");
+      return;
+    }
+
+    const palette = getColorPaletteByKey(catFormColorKey);
+
+    if (editingCategory) {
+      const nameExists = treatmentCategories.some(
+        c => c.id !== editingCategory.id && c.name.toLowerCase() === cleanName.toLowerCase()
+      );
+      if (nameExists) {
+        showToast(`A category named "${cleanName}" already exists.`, "error");
+        return;
+      }
+
+      const updated = treatmentCategories.map(c => {
+        if (c.id === editingCategory.id) {
+          return {
+            ...c,
+            name: cleanName,
+            displayName: cleanName,
+            colorKey: catFormColorKey,
+            colorDot: palette.dotColor,
+            colorBadge: palette.badgeBg,
+            colorTooth: palette.toothFillClass,
+          };
+        }
+        return c;
+      });
+
+      await persistTreatmentCatalogue(updated);
+      showToast(`Category "${cleanName}" updated successfully.`, "success");
+    } else {
+      const nameExists = treatmentCategories.some(
+        c => c.name.toLowerCase() === cleanName.toLowerCase()
+      );
+      if (nameExists) {
+        showToast(`A category named "${cleanName}" already exists.`, "error");
+        return;
+      }
+
+      const newId = cleanName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "") || `cat-${Date.now()}`;
+      const newCat: TreatmentCategoryDef = {
+        id: newId,
+        name: cleanName,
+        displayName: cleanName,
+        colorKey: catFormColorKey,
+        colorDot: palette.dotColor,
+        colorBadge: palette.badgeBg,
+        colorTooth: palette.toothFillClass,
+        subTreatments: [],
+        aliases: [],
+        sortOrder: treatmentCategories.length + 1,
+        isActive: true,
+      };
+
+      const updated = [...treatmentCategories, newCat];
+      await persistTreatmentCatalogue(updated);
+      setExpandedCategories(prev => ({ ...prev, [newId]: true }));
+      showToast(`Category "${cleanName}" created successfully.`, "success");
+    }
+
+    setCategoryModalOpen(false);
+  };
+
+  const handleOpenAddSubTreatment = (categoryId: string) => {
+    if (!isOwner) {
+      showToast("Only clinic owners and dentists can manage the treatment catalogue.", "error");
+      return;
+    }
+    setEditingSubTreatment(null);
+    setSubFormCatId(categoryId);
+    setSubFormName("");
+    setSubTreatmentModalOpen(true);
+  };
+
+  const handleOpenEditSubTreatment = (categoryId: string, subName: string) => {
+    if (!isOwner) {
+      showToast("Only clinic owners and dentists can manage the treatment catalogue.", "error");
+      return;
+    }
+    setEditingSubTreatment({ categoryId, subName, originalSubName: subName });
+    setSubFormCatId(categoryId);
+    setSubFormName(subName);
+    setSubTreatmentModalOpen(true);
+  };
+
+  const handleSaveSubTreatment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isOwner) {
+      showToast("Only clinic owners and dentists can manage the treatment catalogue.", "error");
+      return;
+    }
+    const cleanSub = subFormName.trim();
+    if (!cleanSub) {
+      showToast("Please enter a sub-treatment name.", "error");
+      return;
+    }
+
+    const targetCat = treatmentCategories.find(c => c.id === subFormCatId);
+    if (!targetCat) {
+      showToast("Target category not found.", "error");
+      return;
+    }
+
+    if (editingSubTreatment) {
+      const existingSubs = targetCat.subTreatments || [];
+      const isDuplicate = existingSubs.some(
+        s => s.toLowerCase() === cleanSub.toLowerCase() && s.toLowerCase() !== editingSubTreatment.originalSubName?.toLowerCase()
+      );
+      if (isDuplicate) {
+        showToast(`Sub-treatment "${cleanSub}" already exists under ${targetCat.name}.`, "error");
+        return;
+      }
+
+      const updatedSubs = existingSubs.map(s => s === editingSubTreatment.originalSubName ? cleanSub : s);
+      const updated = treatmentCategories.map(c => c.id === targetCat.id ? { ...c, subTreatments: updatedSubs } : c);
+      await persistTreatmentCatalogue(updated);
+      showToast(`Sub-treatment "${cleanSub}" updated successfully.`, "success");
+    } else {
+      const existingSubs = targetCat.subTreatments || [];
+      const isDuplicate = existingSubs.some(s => s.toLowerCase() === cleanSub.toLowerCase());
+      if (isDuplicate) {
+        showToast(`Sub-treatment "${cleanSub}" already exists under ${targetCat.name}.`, "error");
+        return;
+      }
+
+      const updatedSubs = [...existingSubs, cleanSub];
+      const updated = treatmentCategories.map(c => c.id === targetCat.id ? { ...c, subTreatments: updatedSubs } : c);
+      await persistTreatmentCatalogue(updated);
+      setExpandedCategories(prev => ({ ...prev, [targetCat.id]: true }));
+      showToast(`Sub-treatment "${cleanSub}" added under ${targetCat.name}.`, "success");
+    }
+
+    setSubTreatmentModalOpen(false);
+  };
+
+  const handleConfirmDeleteTreatment = async () => {
+    if (!deleteTreatmentConfirm) return;
+    if (!isOwner) {
+      showToast("Only clinic owners and dentists can manage the treatment catalogue.", "error");
+      setDeleteTreatmentConfirm(null);
+      return;
+    }
+
+    if (deleteTreatmentConfirm.type === "category") {
+      const catToDelete = deleteTreatmentConfirm.category;
+      const updated = treatmentCategories.filter(c => c.id !== catToDelete.id);
+      await persistTreatmentCatalogue(updated);
+      await deleteCategoryFromDb(catToDelete.id);
+      showToast(`Category "${catToDelete.name}" deleted. Historical patient records remain intact.`, "success");
+    } else if (deleteTreatmentConfirm.type === "subTreatment" && deleteTreatmentConfirm.subName) {
+      const cat = deleteTreatmentConfirm.category;
+      const subToDelete = deleteTreatmentConfirm.subName;
+      const updatedSubs = (cat.subTreatments || []).filter(s => s !== subToDelete);
+      const updated = treatmentCategories.map(c => c.id === cat.id ? { ...c, subTreatments: updatedSubs } : c);
+      await persistTreatmentCatalogue(updated);
+      showToast(`Sub-treatment "${subToDelete}" deleted from ${cat.name}. Historical records remain intact.`, "success");
+    }
+
+    setDeleteTreatmentConfirm(null);
+  };
+
+  const toggleCategoryExpand = (catId: string) => {
+    setExpandedCategories(prev => ({ ...prev, [catId]: !prev[catId] }));
+  };
+
 
 
   // --- HELPER DYNAMIC CALCULATIONS ---
@@ -4539,19 +5713,8 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   };
 
   const pushActivity = async (type: ActivityItem["type"], msg: string) => {
-    const now = Date.now();
-    // Prevent duplicate rapid triggers or re-renders
-    if (
-      lastPushedActivityRef.current &&
-      lastPushedActivityRef.current.msg === msg &&
-      now - lastPushedActivityRef.current.time < 1500
-    ) {
-      return;
-    }
-    lastPushedActivityRef.current = { msg, time: now };
-
     const newAct: ActivityItem = {
-      id: `act-${now}-${Math.random().toString(36).substring(2, 9)}`,
+      id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
       type,
       msg,
       time: "Just now"
@@ -4560,19 +5723,13 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      const userName = currentUserName || session?.user?.user_metadata?.full_name || session?.user?.email?.split("@")[0] || "Staff";
-
-      const { error: insertErr } = await supabase.from("activities").insert({
-        title: msg,
-        user_name: userName
+      await supabase.from("activities").insert({
+        user_id: session?.user?.id || null,
+        action: type,
+        entity_type: type,
+        description: msg
       });
-
-      if (insertErr) {
-        console.warn("Non-fatal: optional activity logging failed:", insertErr.message, insertErr.code);
-      }
-    } catch (err: any) {
-      console.warn("Non-fatal: error in activity logging routine:", err?.message || err);
-    }
+    } catch (e) {}
   };
 
   // --- WORKFLOW EVENT HANDLERS ---
@@ -4680,7 +5837,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         prescriptions: updatedPrescriptions,
         files: updatedFiles,
         notes: updatedNotes,
-        visit: "12 Aug 2026"
+        visit: dynamicTodayUiDate
       })
       .eq("patient_id", appt.patientId);
 
@@ -4738,7 +5895,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         tooth_number: consultSelectedTooth || null,
         cost: treatmentCost,
         notes: consultNotes.trim() || null,
-        treatment_date: new Date().toISOString().split("T")[0]
+        treatment_date: getTodayKolkataDbDate()
       };
 
       const { data: insertedTreatment, error: treatInsErr } = await supabase
@@ -4758,7 +5915,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           doctor: appt.doctor,
           stage: "Completed",
           notes: consultNotes,
-          nextVisit: "10 Sep 2026",
+          nextVisit: "",
           prescription: consultPrescription || "None",
           tooth: insertedTreatment.tooth_number || undefined,
           cost: Number(insertedTreatment.cost) || undefined
@@ -4773,7 +5930,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         doctor: appt.doctor,
         stage: "Completed",
         notes: consultNotes,
-        nextVisit: "10 Sep 2026",
+        nextVisit: "",
         prescription: consultPrescription || "None"
       };
       setTreatments(prev => [newTreatmentLog, ...prev]);
@@ -4789,7 +5946,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
             prescriptions: updatedPrescriptions,
             files: updatedFiles,
             notes: updatedNotes,
-            visit: "12 Aug 2026"
+            visit: dynamicTodayUiDate
           };
         }
         return p;
@@ -4819,7 +5976,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       total: tot,
       paidAmount: 0,
       status: "Pending",
-      paymentDate: "12 Aug 2026",
+      paymentDate: dynamicTodayUiDate,
       paymentLogs: []
     };
 
@@ -4842,7 +5999,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     const finalInvoiceTotal = calculateInvoiceTotal();
 
     const paymentLogs = [...selectedInvoiceForPayment.paymentLogs];
-    const logDate = "12 Aug 2026";
+    const logDate = dynamicTodayUiDate;
     if (paymentCollectAmt > 0) {
       paymentLogs.push({ method: paymentMethod, amount: paymentCollectAmt, date: logDate });
     }
@@ -5005,18 +6162,13 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       }
     }
 
-    // Generate unique Patient ID by counting rows in the database
-    const { count, error: countErr } = await supabase
+    // Generate sequential OP Number starting from 10000
+    const { data: dbAllPats } = await supabase
       .from("patients")
-      .select("*", { count: "exact", head: true });
+      .select("patient_id");
 
-    if (countErr) {
-      console.error("Walk-in ID generation failed: count query error", countErr.message, countErr.code);
-      showToast("Failed to generate patient ID.", "error");
-      return;
-    }
-
-    const patientId = `DS-${1000 + (count || 0) + 1}`;
+    const combinedList = dbAllPats && dbAllPats.length > 0 ? dbAllPats.map((p: any) => ({ id: p.patient_id })) : patients;
+    const patientId = getNextSequentialPatientId(combinedList);
 
     const { data: insertedPat, error } = await supabase
       .from("patients")
@@ -5027,7 +6179,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         age: newPatAge,
         gender: newPatGender,
         address: newPatAddress || "Bengaluru",
-        visit: "12 Aug 2026",
+        visit: dynamicTodayUiDate,
         medical_notes: newPatAllergies || "None",
         balance: "₹0",
         status: "Active",
@@ -5050,7 +6202,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       age: insertedPat.age,
       gender: insertedPat.gender,
       address: insertedPat.address || "Bengaluru",
-      visit: insertedPat.visit || "12 Aug 2026",
+      visit: insertedPat.visit || dynamicTodayUiDate,
       medicalNotes: insertedPat.medical_notes || "None",
       balance: insertedPat.balance || "₹0",
       status: insertedPat.status || "Active",
@@ -5072,8 +6224,8 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       .insert({
         patient_id: insertedPat.id,
         doctor_id: doctorId,
-        appointment_date: new Date().toISOString().split("T")[0],
-        time_slot: new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }),
+        appointment_date: getTodayKolkataDbDate(),
+        time_slot: getNextAvailableAppointmentSlot(),
         procedure_name: "Consultation",
         status: "Waiting",
         queue_token: tokenStr,
@@ -5263,7 +6415,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       .from("patients")
       .select("patient_id");
 
-    const combinedList = dbAllPats && dbAllPats.length > 0 ? dbAllPats.map(p => ({ id: p.patient_id })) : patients;
+    const combinedList = dbAllPats && dbAllPats.length > 0 ? dbAllPats.map((p: any) => ({ id: p.patient_id })) : patients;
     const patientId = getNextSequentialPatientId(combinedList);
 
     // Perform database insertion
@@ -5276,7 +6428,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         age: parsedAge,
         gender: patientData.gender,
         address: patientData.address || "Bengaluru",
-        visit: "12 Aug 2026",
+        visit: dynamicTodayUiDate,
         medical_notes: patientData.medicalNotes || "None",
         balance: "₹0",
         status: "Active",
@@ -5306,7 +6458,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       age: insertedPat.age,
       gender: insertedPat.gender,
       address: insertedPat.address || "Bengaluru",
-      visit: insertedPat.visit || "12 Aug 2026",
+      visit: insertedPat.visit || dynamicTodayUiDate,
       medicalNotes: insertedPat.medical_notes || "None",
       balance: insertedPat.balance || "₹0",
       status: insertedPat.status || "Active",
@@ -5573,7 +6725,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         total: tot,
         paidAmount: 0,
         status: "Pending",
-        paymentDate: "12 Aug 2026",
+        paymentDate: dynamicTodayUiDate,
         paymentLogs: []
       };
 
@@ -5619,7 +6771,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           total: tot,
           paidAmount: 0,
           status: "Pending",
-          paymentDate: "12 Aug 2026",
+          paymentDate: dynamicTodayUiDate,
           paymentLogs: []
         };
         setInvoices(prev => [newInvoice, ...prev]);
@@ -5873,28 +7025,24 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     // Today's appointments filtered list
     const todayApptsList = appointments.filter(a => a.date === activeDashboardDate && a.status !== "Cancelled");
 
-    // 15-Day Performance Tracker Data
-    const performanceData = [
-      { date: "29 Jul", fullDate: "Jul 29, 2026", consultations: 12, appointments: 8, newPatients: 2 },
-      { date: "30 Jul", fullDate: "Jul 30, 2026", consultations: 15, appointments: 10, newPatients: 3 },
-      { date: "31 Jul", fullDate: "Jul 31, 2026", consultations: 18, appointments: 12, newPatients: 4 },
-      { date: "1 Aug", fullDate: "Aug 1, 2026", consultations: 14, appointments: 11, newPatients: 3 },
-      { date: "2 Aug", fullDate: "Aug 2, 2026", consultations: 8, appointments: 6, newPatients: 1 },
-      { date: "3 Aug", fullDate: "Aug 3, 2026", consultations: 10, appointments: 8, newPatients: 2 },
-      { date: "4 Aug", fullDate: "Aug 4, 2026", consultations: 16, appointments: 11, newPatients: 4 },
-      { date: "5 Aug", fullDate: "Aug 5, 2026", consultations: 20, appointments: 14, newPatients: 5 },
-      { date: "6 Aug", fullDate: "Aug 6, 2026", consultations: 15, appointments: 12, newPatients: 3 },
-      { date: "7 Aug", fullDate: "Aug 7, 2026", consultations: 12, appointments: 9, newPatients: 2 },
-      { date: "8 Aug", fullDate: "Aug 8, 2026", consultations: 9, appointments: 7, newPatients: 1 },
-      { date: "9 Aug", fullDate: "Aug 9, 2026", consultations: 14, appointments: 10, newPatients: 3 },
-      { date: "10 Aug", fullDate: "Aug 10, 2026", consultations: 18, appointments: 13, newPatients: 4 },
-      { date: "11 Aug", fullDate: "Aug 11, 2026", consultations: 22, appointments: 16, newPatients: 6 },
-      { date: "12 Aug", fullDate: "Aug 12, 2026", consultations: 19, appointments: 14, newPatients: 5 }
-    ];
+    // Dynamic 15-Day Performance Tracker Data ending on activeDashboardDate
+    const past15Days = getPast15DaysKolkata(activeDashboardDate);
+    const performanceData = past15Days.map(day => {
+      const apptsCount = appointments.filter(a => (a.date === day.uiDate || a.date === day.dbDate) && a.status !== "Cancelled").length;
+      const consultsCount = treatments.filter(t => t.date === day.uiDate || t.date === day.dbDate).length;
+      const newPatsCount = patients.filter(p => p.visit === day.uiDate || p.visit === day.dbDate || (p.createdAt && (convertToUiDate(p.createdAt.split("T")[0]) === day.uiDate || p.createdAt.split("T")[0] === day.dbDate))).length;
+      return {
+        date: day.date,
+        fullDate: day.fullDate,
+        consultations: consultsCount,
+        appointments: apptsCount,
+        newPatients: newPatsCount
+      };
+    });
 
-    const consultationsPoints = performanceData.map((d, i) => ({ x: 40 + i * 67.14, y: 210 - d.consultations * 7.6 }));
-    const appointmentsPoints = performanceData.map((d, i) => ({ x: 40 + i * 67.14, y: 210 - d.appointments * 7.6 }));
-    const newPatientsPoints = performanceData.map((d, i) => ({ x: 40 + i * 67.14, y: 210 - d.newPatients * 7.6 }));
+    const consultationsPoints = performanceData.map((d, i) => ({ x: 40 + i * 67.14, y: Math.max(20, Math.min(210, 210 - Math.min(d.consultations, 25) * 7.6)) }));
+    const appointmentsPoints = performanceData.map((d, i) => ({ x: 40 + i * 67.14, y: Math.max(20, Math.min(210, 210 - Math.min(d.appointments, 25) * 7.6)) }));
+    const newPatientsPoints = performanceData.map((d, i) => ({ x: 40 + i * 67.14, y: Math.max(20, Math.min(210, 210 - Math.min(d.newPatients, 25) * 7.6)) }));
 
     const getBezierPath = (pts: { x: number; y: number }[]) => {
       if (pts.length === 0) return "";
@@ -5965,7 +7113,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         total: 500,
         paidAmount: 0,
         status: "Pending",
-        paymentDate: "12 Aug 2026",
+        paymentDate: dynamicTodayUiDate,
         paymentLogs: []
       };
       setInvoices(prev => [newInvoice, ...prev]);
@@ -7890,23 +9038,44 @@ ${clinicName}`;
         if (activeTreatment) {
           const currentChart = { ...(patientItem.dentalChart || {}) };
           const existingList = parseToothTreatments(currentChart[toothIndex]);
-          const entryStr = `${activeTreatment} (Planned)`;
+          const parsedActive = parseTreatmentEntry(activeTreatment);
+          const entryStr = buildTreatmentEntryString(parsedActive.category, parsedActive.subTreatment, "Planned");
+          
           let updatedList: string[];
-          if (existingList.some(item => item.toLowerCase().startsWith(activeTreatment.toLowerCase()))) {
-            updatedList = existingList.filter(item => !item.toLowerCase().startsWith(activeTreatment.toLowerCase()));
+          const isAlreadyAssigned = existingList.some(item => {
+            const p = parseTreatmentEntry(item);
+            if (parsedActive.subTreatment) {
+              return p.category.toLowerCase() === parsedActive.category.toLowerCase() &&
+                     p.subTreatment?.toLowerCase() === parsedActive.subTreatment.toLowerCase();
+            }
+            return p.category.toLowerCase() === parsedActive.category.toLowerCase();
+          });
+
+          if (isAlreadyAssigned) {
+            updatedList = existingList.filter(item => {
+              const p = parseTreatmentEntry(item);
+              if (parsedActive.subTreatment) {
+                return !(p.category.toLowerCase() === parsedActive.category.toLowerCase() &&
+                         p.subTreatment?.toLowerCase() === parsedActive.subTreatment.toLowerCase());
+              }
+              return p.category.toLowerCase() !== parsedActive.category.toLowerCase();
+            });
+            showToast(`Removed ${activeTreatment} from Tooth #${ALL_TEETH.find(t => t.index === toothIndex)?.fdi || toothIndex}.`, "success");
           } else {
             updatedList = [...existingList, entryStr];
+            showToast(`Added ${activeTreatment} to Tooth #${ALL_TEETH.find(t => t.index === toothIndex)?.fdi || toothIndex}.`, "success");
           }
+
           if (updatedList.length === 0) {
             delete currentChart[toothIndex];
           } else {
             currentChart[toothIndex] = updatedList.join(" | ");
           }
-          supabase.from("patients").update({ dental_chart: currentChart }).eq("patient_id", patientItem.id).then(({ error }) => {
+          supabase.from("patients").update({ dental_chart: currentChart }).eq("patient_id", patientItem.id).then(({ error }: any) => {
             if (error) console.error("Database error saving dental chart:", error);
           });
           setPatients(prev => prev.map(p => p.id === patientItem.id ? { ...p, dentalChart: currentChart } : p));
-          showToast(`Updated ${activeTreatment} for Tooth #${ALL_TEETH.find(t => t.index === toothIndex)?.fdi || toothIndex}.`, "success");
+          setEditTreatmentAdvised(formatTreatmentAdvisedFromChart(currentChart));
           return;
         }
 
@@ -7926,21 +9095,31 @@ ${clinicName}`;
         });
       };
 
-      const handleSelectAllTeeth = (specificTreatment?: "Scaling" | "Braces") => {
-        if (specificTreatment) {
+      const handleSelectAllTeeth = (specificCategory?: string, specificSubTreatment?: string) => {
+        if (specificCategory) {
           const currentChart = { ...(patientItem.dentalChart || {}) };
-          const entryStr = `${specificTreatment} (Planned)`;
+          const entryStr = buildTreatmentEntryString(specificCategory, specificSubTreatment, "Planned");
           ALL_TEETH.forEach(t => {
             const existingList = parseToothTreatments(currentChart[t.index]);
-            if (!existingList.some(item => item.toLowerCase().startsWith(specificTreatment.toLowerCase()))) {
+            const hasMatch = existingList.some(item => {
+              const p = parseTreatmentEntry(item);
+              if (specificSubTreatment) {
+                return p.category.toLowerCase() === specificCategory.toLowerCase() &&
+                       p.subTreatment?.toLowerCase() === specificSubTreatment.toLowerCase();
+              }
+              return p.category.toLowerCase() === specificCategory.toLowerCase();
+            });
+            if (!hasMatch) {
               currentChart[t.index] = [...existingList, entryStr].join(" | ");
             }
           });
-          supabase.from("patients").update({ dental_chart: currentChart }).eq("patient_id", patientItem.id).then(({ error }) => {
+          supabase.from("patients").update({ dental_chart: currentChart }).eq("patient_id", patientItem.id).then(({ error }: any) => {
             if (error) console.error("Database error saving dental chart:", error);
           });
           setPatients(prev => prev.map(p => p.id === patientItem.id ? { ...p, dentalChart: currentChart } : p));
-          showToast(`Assigned ${specificTreatment} to All Teeth.`, "success");
+          setEditTreatmentAdvised(formatTreatmentAdvisedFromChart(currentChart));
+          const label = specificSubTreatment ? `${specificCategory} (${specificSubTreatment})` : specificCategory;
+          showToast(`Assigned ${label} to All Teeth.`, "success");
           return;
         }
         const allIndices = ALL_TEETH.map(t => t.index);
@@ -7952,13 +9131,24 @@ ${clinicName}`;
       const handleClearSelection = () => {
         setSelectedTeeth([]);
         setChartSelectedTooth(null);
+        setChartCategory("");
+        setChartSubTreatment("");
+        setChartTreatmentName("");
       };
 
       const handleSaveToothTreatment = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!patientItem) return;
-        if (!chartTreatmentName.trim()) {
-          showToast("Please choose a treatment procedure.", "error");
+        if (!patientItem || isSavingToothTreatment) return;
+
+        const effectiveCategory = chartCategory.trim() || (chartTreatmentName ? parseTreatmentEntry(chartTreatmentName).category : "");
+        if (!effectiveCategory) {
+          showToast("Please choose a treatment category.", "error");
+          return;
+        }
+
+        const catDef = findCategory(effectiveCategory);
+        if (catDef && catDef.subTreatments && catDef.subTreatments.length > 0 && !chartSubTreatment.trim()) {
+          showToast("Please choose a sub-treatment.", "error");
           return;
         }
 
@@ -7971,112 +9161,129 @@ ${clinicName}`;
           return;
         }
 
-        const currentChart = { ...(patientItem.dentalChart || {}) };
-        const newEntryStr = `${chartTreatmentName.trim()} (${chartStatus})`;
+        setIsSavingToothTreatment(true);
 
-        targetTeeth.forEach(toothIdx => {
-          const existingList = parseToothTreatments(currentChart[toothIdx]);
-          if (!existingList.some(item => item.toLowerCase() === newEntryStr.toLowerCase())) {
-            const updatedList = [...existingList, newEntryStr];
-            currentChart[toothIdx] = updatedList.join(" | ");
+        try {
+          const currentChart = { ...(patientItem.dentalChart || {}) };
+          const effectiveSub = chartSubTreatment.trim() || undefined;
+          const newEntryStr = buildTreatmentEntryString(effectiveCategory, effectiveSub, chartStatus);
+
+          targetTeeth.forEach(toothIdx => {
+            const existingList = parseToothTreatments(currentChart[toothIdx]);
+            if (!existingList.some(item => item.toLowerCase() === newEntryStr.toLowerCase())) {
+              const updatedList = [...existingList, newEntryStr];
+              currentChart[toothIdx] = updatedList.join(" | ");
+            }
+          });
+
+          const { error: updateErr } = await supabase
+            .from("patients")
+            .update({ dental_chart: currentChart })
+            .eq("patient_id", patientItem.id);
+
+          if (updateErr) {
+            console.error("Failed to save dental chart in database:", updateErr.message, updateErr.code);
+            showToast("Failed to save dental chart in database.", "error");
+            setIsSavingToothTreatment(false);
+            return;
           }
-        });
 
-        const { error: updateErr } = await supabase
-          .from("patients")
-          .update({ dental_chart: currentChart })
-          .eq("patient_id", patientItem.id);
-
-        if (updateErr) {
-          console.error("Failed to save dental chart in database:", updateErr.message, updateErr.code);
-          showToast("Failed to save dental chart in database.", "error");
-          return;
-        }
-
-        setPatients(prev => prev.map(p => {
-          if (p.id === patientItem.id) {
-            return { ...p, dentalChart: currentChart };
-          }
-          return p;
-        }));
-        setEditTreatmentAdvised(formatTreatmentAdvisedFromChart(currentChart));
-
-        // Synchronize with Treatments History Log
-        const doctorObj = doctors.find(d => d.name === chartDoctor);
-        const treatCostVal = Number(chartCost) || 0;
-        const treatDateVal = chartDate || new Date().toISOString().split("T")[0];
-
-        const dbInsertRows = targetTeeth.map(tIdx => {
-          const toothObj = ALL_TEETH.find(t => t.index === tIdx);
-          const fdi = toothObj?.fdi || tIdx;
-          return {
-            patient_id: patientItem.uuid || patientItem.id,
-            doctor_id: doctorObj?.id || null,
-            name: chartTreatmentName.trim(),
-            stage: chartStatus,
-            notes: chartNotes.trim() || undefined,
-            diagnosis: chartDiagnosis.trim() || undefined,
-            tooth_number: fdi,
-            cost: treatCostVal,
-            treatment_date: treatDateVal
-          };
-        });
-
-        const { data: insertedTreats } = await supabase
-          .from("treatments")
-          .insert(dbInsertRows)
-          .select();
-
-        if (insertedTreats && insertedTreats.length > 0) {
-          const newTreatItems: TreatmentItem[] = insertedTreats.map(row => ({
-            id: row.id,
-            name: row.name,
-            patient: patientItem.name,
-            doctor: chartDoctor || doctors[0]?.name || "Dr. Deepa Kodali",
-            stage: (row.stage === "Completed" || row.stage === "In Progress") ? row.stage : "Planned",
-            notes: row.notes || "",
-            nextVisit: "",
-            prescription: "",
-            tooth: row.tooth_number || undefined,
-            cost: Number(row.cost) || treatCostVal,
-            diagnosis: row.diagnosis || undefined,
-            date: row.treatment_date ? convertToUiDate(row.treatment_date) : convertToUiDate(treatDateVal)
+          setPatients(prev => prev.map(p => {
+            if (p.id === patientItem.id) {
+              return { ...p, dentalChart: currentChart };
+            }
+            return p;
           }));
-          setTreatments(prev => [...newTreatItems, ...prev]);
-        } else {
-          const fallbackItems: TreatmentItem[] = targetTeeth.map((tIdx, idx) => {
+          setEditTreatmentAdvised(formatTreatmentAdvisedFromChart(currentChart));
+
+          // Synchronize with Treatments History Log
+          const doctorObj = doctors.find(d => d.name === chartDoctor);
+          const treatCostVal = Number(chartCost) || 0;
+          const treatDateVal = chartDate || getTodayKolkataDbDate();
+          const procedureDisplayName = effectiveSub ? `${effectiveCategory} — ${effectiveSub}` : effectiveCategory;
+
+          const dbInsertRows = targetTeeth.map(tIdx => {
             const toothObj = ALL_TEETH.find(t => t.index === tIdx);
             const fdi = toothObj?.fdi || tIdx;
             return {
-              id: `tr-${Date.now()}-${idx}`,
-              name: chartTreatmentName.trim(),
-              patient: patientItem.name,
-              doctor: chartDoctor || doctors[0]?.name || "Dr. Deepa Kodali",
-              stage: (chartStatus === "Completed" || chartStatus === "In Progress") ? chartStatus : "Planned",
-              notes: chartNotes.trim() || "",
-              nextVisit: "",
-              prescription: "",
-              tooth: fdi,
-              cost: treatCostVal,
+              patient_id: patientItem.uuid || patientItem.id,
+              doctor_id: doctorObj?.id || null,
+              name: procedureDisplayName,
+              category: effectiveCategory,
+              sub_treatment: effectiveSub || null,
+              stage: chartStatus,
+              notes: chartNotes.trim() || undefined,
               diagnosis: chartDiagnosis.trim() || undefined,
-              date: convertToUiDate(treatDateVal)
+              tooth_number: fdi,
+              cost: treatCostVal,
+              treatment_date: treatDateVal
             };
           });
-          setTreatments(prev => [...fallbackItems, ...prev]);
+
+          const { data: insertedTreats } = await supabase
+            .from("treatments")
+            .insert(dbInsertRows)
+            .select();
+
+          if (insertedTreats && insertedTreats.length > 0) {
+            const newTreatItems: TreatmentItem[] = insertedTreats.map((row: any) => ({
+              id: row.id,
+              name: row.name,
+              category: row.category || effectiveCategory,
+              subTreatment: row.sub_treatment || effectiveSub,
+              patient: patientItem.name,
+              doctor: chartDoctor || doctors[0]?.name || "Dr. Deepa Kodali",
+              stage: (row.stage === "Completed" || row.stage === "In Progress") ? row.stage : "Planned",
+              notes: row.notes || "",
+              nextVisit: "",
+              prescription: "",
+              tooth: row.tooth_number || undefined,
+              cost: Number(row.cost) || treatCostVal,
+              diagnosis: row.diagnosis || undefined,
+              date: row.treatment_date ? convertToUiDate(row.treatment_date) : convertToUiDate(treatDateVal)
+            }));
+            setTreatments(prev => [...newTreatItems, ...prev]);
+          } else {
+            const fallbackItems: TreatmentItem[] = targetTeeth.map((tIdx, idx) => {
+              const toothObj = ALL_TEETH.find(t => t.index === tIdx);
+              const fdi = toothObj?.fdi || tIdx;
+              return {
+                id: `tr-${Date.now()}-${idx}`,
+                name: procedureDisplayName,
+                category: effectiveCategory,
+                subTreatment: effectiveSub,
+                patient: patientItem.name,
+                doctor: chartDoctor || doctors[0]?.name || "Dr. Deepa Kodali",
+                stage: (chartStatus === "Completed" || chartStatus === "In Progress") ? chartStatus : "Planned",
+                notes: chartNotes.trim() || "",
+                nextVisit: "",
+                prescription: "",
+                tooth: fdi,
+                cost: treatCostVal,
+                diagnosis: chartDiagnosis.trim() || undefined,
+                date: convertToUiDate(treatDateVal)
+              };
+            });
+            setTreatments(prev => [...fallbackItems, ...prev]);
+          }
+
+          const teethLabel = targetTeeth.map(tIdx => {
+            const toothObj = ALL_TEETH.find(t => t.index === tIdx);
+            return `#${toothObj?.fdi || tIdx}`;
+          }).join(", ");
+
+          showToast(`Assigned ${procedureDisplayName} (${chartStatus}) to Tooth ${teethLabel}.`, "success");
+
+          setSelectedTeeth([]);
+          setChartSelectedTooth(null);
+          setChartCategory("");
+          setChartSubTreatment("");
+          setChartTreatmentName("");
+          setChartDiagnosis("");
+          setChartNotes("");
+        } finally {
+          setIsSavingToothTreatment(false);
         }
-
-        const teethLabel = targetTeeth.map(tIdx => {
-          const toothObj = ALL_TEETH.find(t => t.index === tIdx);
-          return `#${toothObj?.fdi || tIdx}`;
-        }).join(", ");
-
-        showToast(`Assigned ${chartTreatmentName} (${chartStatus}) to Tooth ${teethLabel}.`, "success");
-
-        setSelectedTeeth([]);
-        setChartSelectedTooth(null);
-        setChartTreatmentName("");
-        setChartDiagnosis("");
-        setChartNotes("");
       };
 
       const handleClearAllTeeth = async () => {
@@ -8123,7 +9330,7 @@ ${clinicName}`;
               </div>
             </div>
 
-            <div className="flex items-center gap-4 text-xs font-semibold text-slate-500 border-l sm:border-l-0 pl-4 sm:pl-0">
+            <div className="flex items-center gap-4 text-xs font-semibold text-slate-500 border-l sm:border-l-0 pl-4 sm:pl-0 flex-wrap">
               <div>
                 <span className="text-[11px] font-bold text-slate-405 block uppercase">Phone</span>
                 <span className="text-slate-800 dark:text-slate-200 text-[13px] sm:text-[14px] font-semibold">{patientItem.phone}</span>
@@ -8136,6 +9343,17 @@ ${clinicName}`;
                 <span className="text-[11px] font-bold text-slate-405 block uppercase">Status</span>
                 <span className="bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded-full font-bold text-[11px] inline-block">{patientItem.status}</span>
               </div>
+              {isOwner && (
+                <Button
+                  type="button"
+                  onClick={() => setPatientToDelete(patientItem)}
+                  variant="outline"
+                  className="h-8 px-3 text-xs font-semibold border-rose-200 dark:border-rose-900/40 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/30 flex items-center gap-1.5 cursor-pointer ml-auto"
+                >
+                  <Trash2 className="h-3.5 w-3.5 text-rose-600 dark:text-rose-400" />
+                  Delete Patient
+                </Button>
+              )}
             </div>
           </div>
 
@@ -8172,15 +9390,23 @@ ${clinicName}`;
                     <p className="text-xs text-slate-500">View and manage the patient's dental case sheet.</p>
                   </div>
 
-                  <div className="flex items-center gap-2.5 shrink-0 no-print">
+                  <div className="flex items-center gap-2.5 shrink-0 no-print flex-wrap">
                     <Button
                       type="button"
-                      onClick={() => window.print()}
+                      onClick={handleDownloadCaseSheetPDF}
+                      className="h-9 px-3.5 text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white flex items-center gap-1.5 shadow-xs cursor-pointer"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download PDF
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={handlePrintCaseSheet}
                       variant="outline"
-                      className="h-9 px-3.5 text-xs font-semibold border-slate-300 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
+                      className="h-9 px-3.5 text-xs font-semibold border-slate-300 text-slate-700 hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
                     >
                       <Printer className="h-4 w-4 text-slate-500" />
-                      Print
+                      Print / Save PDF
                     </Button>
                     {!isReceptionist && (
                       <Button
@@ -8194,7 +9420,7 @@ ${clinicName}`;
                         }`}
                       >
                         <Pencil className="h-3.5 w-3.5" />
-                        {isEditingCaseSheet ? "Editing Mode" : "Edit"}
+                        {isEditingCaseSheet ? "View Case Sheet" : "Edit Clinical Data"}
                       </Button>
                     )}
                     {isEditingCaseSheet && !isReceptionist && (
@@ -8204,35 +9430,58 @@ ${clinicName}`;
                         className="h-9 px-4 text-xs font-semibold bg-blue-600 hover:bg-blue-500 text-white flex items-center gap-1.5 shadow-xs"
                       >
                         <FileText className="h-3.5 w-3.5" />
-                        Save
+                        Save to Database
                       </Button>
                     )}
                   </div>
                 </div>
 
-                {/* Digital Dental Case Sheet Container */}
-                <div id="print-area" className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-7 shadow-xs space-y-6 print:space-y-3 print:p-2 print:border-none print:shadow-none text-xs animate-fadeIn">
-                  {/* PRINT-ONLY CLINIC HEADER */}
-                  <div className="hidden print:block border-b-2 border-slate-800 pb-3 mb-3">
-                    <div className="flex justify-between items-center">
-                      <div className="flex items-center gap-3">
-                        <DentalLogo showText={false} iconClassName="h-10 w-10" />
-                        <div>
-                          <h1 className="text-xl font-bold text-slate-900 tracking-tight">{clinicName || "32 Smiles Dental Clinic"}</h1>
-                          <p className="text-xs font-semibold text-slate-600">Dental Clinic / Comprehensive Dental Care</p>
-                          <p className="text-[11px] text-slate-500 font-medium">Phone: +91 98765 43210</p>
-                        </div>
-                      </div>
-                      <div className="text-right space-y-0.5">
-                        <span className="text-sm font-extrabold text-blue-700 block tracking-wider uppercase">DENTAL CASE SHEET</span>
-                        <p className="text-xs font-bold text-slate-800">ID: {patientItem.id}</p>
-                        <p className="text-xs text-slate-600">Date: {patientItem.visit || patientItem.firstVisit || new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" })}</p>
-                      </div>
-                    </div>
-                  </div>
+                {/* EXACT CASE SHEET PRESENTATION (WHEN VIEWING ON SCREEN) */}
+                {!isEditingCaseSheet ? (
+                  <div className="bg-slate-200/80 dark:bg-slate-900/80 p-2 sm:p-6 rounded-xl flex flex-col items-center border border-slate-300 dark:border-slate-800 animate-fadeIn print:hidden shadow-inner w-full">
+                    {(() => {
+                      const activeTreatmentAdvisedStr = formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised || "";
+                      const totalCaseSheetPages = getCaseSheetTotalPages(activeTreatmentAdvisedStr);
 
+                      return (
+                        <ResponsivePdfPreview
+                          pageCount={totalCaseSheetPages}
+                          title="Dental Case Sheet"
+                        >
+                          <CaseSheetPrintTemplate
+                            patient={patientItem}
+                            medicalHistoryConditions={editMedicalHistoryConditions}
+                            medicalHistoryOthers={editMedicalHistoryOthers}
+                            currentMedications={editCurrentMedications}
+                            chiefComplaint={editChiefComplaint}
+                            intraOralExam={editIntraOralExam}
+                            provisionalDiagnosis={editProvisionalDiagnosis}
+                            treatmentAdvised={activeTreatmentAdvisedStr}
+                            visitDate={patientItem.visit || patientItem.firstVisit}
+                          />
+                        </ResponsivePdfPreview>
+                      );
+                    })()}
+                  </div>
+                ) : (
+                  /* Digital Dental Case Sheet Editor Container (When Editing) */
+                  <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-5 sm:p-7 shadow-xs space-y-6 text-xs animate-fadeIn print:hidden">
+                    <div className="p-3 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 rounded-lg flex items-center justify-between">
+                      <div className="flex items-center gap-2 text-blue-800 dark:text-blue-300 font-semibold text-xs">
+                        <Pencil className="h-4 w-4" />
+                        <span>Clinical Editing Mode: Update patient details, medical history, clinical notes or dental chart. Click &quot;Save to Database&quot; when done.</span>
+                      </div>
+                      <Button
+                        type="button"
+                        onClick={() => setIsEditingCaseSheet(false)}
+                        variant="outline"
+                        className="h-7 text-xs border-blue-300 text-blue-700 hover:bg-blue-100"
+                      >
+                        Back to Case Sheet View
+                      </Button>
+                    </div>
                   {/* Top Header Row with Date (Screen Only) */}
-                  <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-3 print:hidden">
+                  <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-800 pb-3">
                     <div className="flex items-center gap-2">
                       <FileText className="h-5 w-5 text-blue-600" />
                       <span className="font-bold text-sm tracking-wide text-slate-900 dark:text-white uppercase">DENTAL CASE SHEET</span>
@@ -8288,7 +9537,7 @@ ${clinicName}`;
                                 className="h-8 text-xs"
                               />
                             ) : (
-                              <span className="font-semibold text-slate-900 dark:text-white">{patientItem.age} Years</span>
+                              <span className="font-semibold text-slate-900 dark:text-white">{patientItem.age ? `${patientItem.age} Years` : ""}</span>
                             )}
                           </div>
                         </div>
@@ -8306,7 +9555,7 @@ ${clinicName}`;
                                 <option value="Female">Female</option>
                               </select>
                             ) : (
-                              <span className="font-semibold text-slate-900 dark:text-white">{patientItem.gender}</span>
+                              <span className="font-semibold text-slate-900 dark:text-white">{patientItem.gender || ""}</span>
                             )}
                           </div>
                         </div>
@@ -8321,7 +9570,7 @@ ${clinicName}`;
                                 className="h-8 text-xs"
                               />
                             ) : (
-                              <span className="font-semibold text-slate-900 dark:text-white">{patientItem.phone}</span>
+                              <span className="font-semibold text-slate-900 dark:text-white">{patientItem.phone || ""}</span>
                             )}
                           </div>
                         </div>
@@ -8340,7 +9589,9 @@ ${clinicName}`;
                                 className="h-8 text-xs"
                               />
                             ) : (
-                              <span className="font-semibold text-slate-900 dark:text-white">{editRefDoctor || "N/A"}</span>
+                              <span className="font-semibold text-slate-900 dark:text-white">
+                                {editRefDoctor && editRefDoctor !== "N/A" ? editRefDoctor : (patientItem.reference && patientItem.reference !== "N/A" ? patientItem.reference : "")}
+                              </span>
                             )}
                           </div>
                         </div>
@@ -8357,7 +9608,9 @@ ${clinicName}`;
                                 className="w-full rounded-md border border-slate-200 p-2 text-xs focus:outline-none dark:border-slate-800 dark:bg-slate-900"
                               />
                             ) : (
-                              <span className="font-semibold text-slate-900 dark:text-white leading-relaxed">{patientItem.address || "N/A"}</span>
+                              <span className="font-semibold text-slate-900 dark:text-white leading-relaxed">
+                                {patientItem.address && patientItem.address !== "N/A" ? patientItem.address : ""}
+                              </span>
                             )}
                           </div>
                         </div>
@@ -8374,7 +9627,27 @@ ${clinicName}`;
                                 className="h-8 text-xs"
                               />
                             ) : (
-                              <span className="font-semibold text-slate-900 dark:text-white">{patientItem.email || "N/A"}</span>
+                              <span className="font-semibold text-slate-900 dark:text-white">
+                                {patientItem.email && patientItem.email !== "N/A" ? patientItem.email : ""}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-3 items-center gap-2">
+                          <Label className="font-bold text-slate-800 dark:text-slate-200">Occupation:</Label>
+                          <div className="col-span-2">
+                            {isEditingCaseSheet ? (
+                              <Input
+                                value={editOccupation}
+                                onChange={e => setEditOccupation(e.target.value)}
+                                placeholder="e.g. Teacher, Engineer, Student"
+                                className="h-8 text-xs"
+                              />
+                            ) : (
+                              <span className="font-semibold text-slate-900 dark:text-white">
+                                {patientItem.occupation && patientItem.occupation !== "N/A" ? patientItem.occupation : ""}
+                              </span>
                             )}
                           </div>
                         </div>
@@ -8449,7 +9722,9 @@ ${clinicName}`;
                             className="h-8 text-xs flex-1"
                           />
                         ) : (
-                          <span className="font-semibold text-slate-800 dark:text-slate-200 italic">{editCurrentMedications || "None"}</span>
+                          <span className="font-semibold text-slate-800 dark:text-slate-200 italic">
+                            {editCurrentMedications && editCurrentMedications !== "None" ? editCurrentMedications : ""}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -8478,8 +9753,8 @@ ${clinicName}`;
                             className="w-full rounded-md border border-slate-200 p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900"
                           />
                         ) : (
-                          <div className="min-h-[48px] print:min-h-0 p-2.5 print:p-2 bg-slate-50/60 dark:bg-slate-900/60 rounded border border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-normal">
-                            {editChiefComplaint || <span className="text-slate-400 italic">No chief complaint recorded.</span>}
+                          <div className="min-h-[72px] print:min-h-[70px] p-2.5 print:p-2 bg-slate-50/60 dark:bg-slate-900/60 rounded border border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-normal print:bg-white print:border-slate-300">
+                            {editChiefComplaint || <span className="text-slate-400 italic print:hidden">No chief complaint recorded.</span>}
                           </div>
                         )}
                       </div>
@@ -8498,13 +9773,39 @@ ${clinicName}`;
                             className="w-full rounded-md border border-slate-200 p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900"
                           />
                         ) : (
-                          <div className="min-h-[48px] print:min-h-0 p-2.5 print:p-2 bg-slate-50/60 dark:bg-slate-900/60 rounded border border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-normal">
-                            {editIntraOralExam || <span className="text-slate-400 italic">No intra oral examination notes recorded.</span>}
+                          <div className="min-h-[72px] print:min-h-[70px] p-2.5 print:p-2 bg-slate-50/60 dark:bg-slate-900/60 rounded border border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-normal print:bg-white print:border-slate-300">
+                            {editIntraOralExam || <span className="text-slate-400 italic print:hidden">No intra oral examination notes recorded.</span>}
                           </div>
                         )}
 
                         {/* Interactive Dental Chart */}
                         <div className="pt-3 border-t border-slate-200 dark:border-slate-800 print:hidden">
+                          {modalCategory && (
+                            <SubTreatmentModal
+                              category={
+                                treatmentCategories.find(c => c.id === modalCategory.id || c.name.toLowerCase() === modalCategory.name.toLowerCase()) || modalCategory
+                              }
+                              selectedSubTreatment={activeTreatment ? parseTreatmentEntry(activeTreatment, treatmentCategories).subTreatment : undefined}
+                              colorDotClass={
+                                modalCategory.colorDot ||
+                                TREATMENT_COLORS[modalCategory.colorKey]?.dotColor ||
+                                getColorPaletteByKey(modalCategory.colorKey).dotColor ||
+                                "bg-blue-500"
+                              }
+                              onClose={() => setModalCategory(null)}
+                              onSelectSubTreatment={(sub) => {
+                                const activeStr = `${modalCategory.name} — ${sub}`;
+                                setActiveTreatment(activeStr);
+                                setModalCategory(null);
+                                showToast(`Activated ${activeStr} mode. Click teeth on chart to assign.`, "success");
+                              }}
+                              onSelectAllTeeth={(sub) => {
+                                handleSelectAllTeeth(modalCategory.name, sub);
+                                setModalCategory(null);
+                              }}
+                            />
+                          )}
+
                           {/* Clear All Confirmation Modal */}
                           {showClearAllConfirm && (
                             <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-fadeIn">
@@ -8622,34 +9923,91 @@ ${clinicName}`;
                                       {/* Row 1 */}
                                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         <div className="space-y-1">
-                                          <label className="text-[13px] font-bold text-slate-700 dark:text-slate-300 block mb-1">Treatment Procedure</label>
+                                          <label className="text-[13px] font-bold text-slate-700 dark:text-slate-300 block mb-1">Treatment Category</label>
                                           <select
                                             className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-[13px] font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900 cursor-pointer"
-                                            value={chartTreatmentName}
+                                            value={chartCategory}
                                             onChange={e => {
-                                              setChartTreatmentName(e.target.value);
+                                              const cat = e.target.value;
+                                              setChartCategory(cat);
+                                              setChartSubTreatment("");
+                                              const catDef = findCategory(cat, treatmentCategories);
+                                              if (!catDef?.subTreatments || catDef.subTreatments.length === 0) {
+                                                setChartTreatmentName(cat);
+                                              } else {
+                                                setChartTreatmentName("");
+                                              }
                                             }}
                                             required
                                           >
-                                            <option value="">-- Choose Procedure --</option>
-                                            {COMMON_TREATMENTS.map(t => (
-                                              <option key={t} value={t}>{t}</option>
+                                            <option value="">-- Choose Category --</option>
+                                            {treatmentCategories.filter(c => c.isActive !== false).map(c => (
+                                              <option key={c.id} value={c.name}>{c.displayName}</option>
                                             ))}
                                           </select>
                                         </div>
-                                        <div className="space-y-1">
-                                          <label className="text-[13px] font-bold text-slate-700 dark:text-slate-300 block mb-1">Treatment Status</label>
-                                          <select
-                                            className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-[13px] font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900 cursor-pointer"
-                                            value={chartStatus}
-                                            onChange={e => setChartStatus(e.target.value as any)}
-                                          >
-                                            <option value="Planned">Planned</option>
-                                            <option value="In Progress">In Progress</option>
-                                            <option value="Completed">Completed</option>
-                                          </select>
-                                        </div>
+                                        {(() => {
+                                          const catDef = findCategory(chartCategory, treatmentCategories);
+                                          const hasSubs = catDef && catDef.subTreatments && catDef.subTreatments.length > 0;
+                                          if (hasSubs) {
+                                            return (
+                                              <div className="space-y-1 animate-fadeIn">
+                                                <label className="text-[13px] font-bold text-slate-700 dark:text-slate-300 block mb-1">Sub-Treatment</label>
+                                                <select
+                                                  className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-[13px] font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900 cursor-pointer"
+                                                  value={chartSubTreatment}
+                                                  onChange={e => {
+                                                    const sub = e.target.value;
+                                                    setChartSubTreatment(sub);
+                                                    setChartTreatmentName(sub ? `${catDef.name} — ${sub}` : "");
+                                                  }}
+                                                  required
+                                                >
+                                                  <option value="">-- Choose Sub-Treatment --</option>
+                                                  {catDef.subTreatments?.map(s => (
+                                                    <option key={s} value={s}>{s}</option>
+                                                  ))}
+                                                </select>
+                                              </div>
+                                            );
+                                          }
+                                          return (
+                                            <div className="space-y-1">
+                                              <label className="text-[13px] font-bold text-slate-700 dark:text-slate-300 block mb-1">Treatment Status</label>
+                                              <select
+                                                className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-[13px] font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900 cursor-pointer"
+                                                value={chartStatus}
+                                                onChange={e => setChartStatus(e.target.value as any)}
+                                              >
+                                                <option value="Planned">Planned</option>
+                                                <option value="In Progress">In Progress</option>
+                                                <option value="Completed">Completed</option>
+                                              </select>
+                                            </div>
+                                          );
+                                        })()}
                                       </div>
+
+                                      {/* Row 1b: If category has sub-treatments, show Treatment Status */}
+                                      {(() => {
+                                        const catDef = findCategory(chartCategory);
+                                        const hasSubs = catDef && catDef.subTreatments && catDef.subTreatments.length > 0;
+                                        if (!hasSubs) return null;
+                                        return (
+                                          <div className="space-y-1 animate-fadeIn">
+                                            <label className="text-[13px] font-bold text-slate-700 dark:text-slate-300 block mb-1">Treatment Status</label>
+                                            <select
+                                              className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-[13px] font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900 cursor-pointer"
+                                              value={chartStatus}
+                                              onChange={e => setChartStatus(e.target.value as any)}
+                                            >
+                                              <option value="Planned">Planned</option>
+                                              <option value="In Progress">In Progress</option>
+                                              <option value="Completed">Completed</option>
+                                            </select>
+                                          </div>
+                                        );
+                                      })()}
 
                                       {/* Row 2 */}
                                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -8695,8 +10053,12 @@ ${clinicName}`;
                                     <Button type="button" onClick={handleClearSelection} className="h-9 px-4 rounded border font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer">
                                       Cancel
                                     </Button>
-                                    <Button type="submit" className="h-9 px-4 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold cursor-pointer shadow-xs">
-                                      Assign Treatment
+                                    <Button
+                                      type="submit"
+                                      disabled={isSavingToothTreatment}
+                                      className="h-9 px-4 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold cursor-pointer shadow-xs disabled:opacity-50"
+                                    >
+                                      {isSavingToothTreatment ? "Saving..." : "Assign Treatment"}
                                     </Button>
                                   </div>
                                 </form>
@@ -8727,73 +10089,96 @@ ${clinicName}`;
                                         </button>
                                       )}
                                     </div>
+
+                                    {/* Active Treatment Banner */}
+                                    {activeTreatment && (() => {
+                                      const parsed = parseTreatmentEntry(activeTreatment);
+                                      const colorCfg = TREATMENT_COLORS[parsed.colorKey] || TREATMENT_COLORS[parsed.category];
+                                      const catDef = findCategory(parsed.category);
+                                      const hasSubs = catDef && catDef.subTreatments && catDef.subTreatments.length > 0;
+                                      return (
+                                        <div className="flex items-center justify-between p-2.5 rounded-lg bg-blue-50/90 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-800 text-xs animate-fadeIn">
+                                          <div className="flex items-center gap-2 min-w-0">
+                                            <span className={`w-3 h-3 rounded-full ${colorCfg?.dotColor || 'bg-blue-500'} shrink-0`} />
+                                            <div className="min-w-0">
+                                              <span className="font-bold text-blue-900 dark:text-blue-200 block truncate">
+                                                Active: {parsed.category}{parsed.subTreatment ? ` → ${parsed.subTreatment}` : ''}
+                                              </span>
+                                              <span className="text-[10px] text-blue-600 dark:text-blue-400 block">
+                                                Click teeth on the chart to assign or toggle.
+                                              </span>
+                                            </div>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 shrink-0 ml-2">
+                                            {hasSubs && (
+                                              <button
+                                                type="button"
+                                                onClick={() => setModalCategory(catDef)}
+                                                className="text-[10px] font-bold px-2 py-1 rounded bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-300 border border-blue-300 dark:border-blue-700 hover:bg-blue-50 cursor-pointer"
+                                              >
+                                                Change
+                                              </button>
+                                            )}
+                                            <button
+                                              type="button"
+                                              onClick={() => setActiveTreatment(null)}
+                                              className="text-[10px] font-bold px-2 py-1 rounded bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
+                                            >
+                                              Exit
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })()}
+
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                                      {Object.entries(TREATMENT_COLORS).map(([tKey, cfg]) => {
-                                        const isActive = activeTreatment === cfg.name;
-                                        const isHoverMenuAvailable = cfg.name === "Scaling" || cfg.name === "Braces";
-                                        const isMenuOpen = openTreatmentMenu === cfg.name;
+                                      {treatmentCategories.filter(c => c.isActive !== false).map((catDef) => {
+                                        const pal = getColorPaletteByKey(catDef.colorKey);
+                                        const colorCfg = catDef.colorDot ? {
+                                          name: catDef.name,
+                                          dotColor: catDef.colorDot,
+                                          badgeBg: catDef.colorBadge || pal.badgeBg,
+                                          toothFillClass: catDef.colorTooth || pal.toothFillClass
+                                        } : (TREATMENT_COLORS[catDef.colorKey] || TREATMENT_COLORS[catDef.name] || pal);
+                                        const parsedActive = activeTreatment ? parseTreatmentEntry(activeTreatment, treatmentCategories) : null;
+                                        const isActive = parsedActive?.category.toLowerCase() === catDef.name.toLowerCase();
+                                        const hasSubTreatments = !!(catDef.subTreatments && catDef.subTreatments.length > 0);
 
                                         return (
                                           <div
-                                            key={tKey}
-                                            onClick={(e) => {
-                                              if (isHoverMenuAvailable) {
-                                                e.stopPropagation();
-                                                setOpenTreatmentMenu(prev => prev === cfg.name ? null : cfg.name);
+                                            key={catDef.id}
+                                            onClick={() => {
+                                              if (hasSubTreatments) {
+                                                setModalCategory(catDef);
                                               } else {
-                                                setActiveTreatment(isActive ? null : cfg.name);
+                                                setActiveTreatment(isActive ? null : catDef.name);
                                               }
                                             }}
-                                            className={`group relative flex items-center justify-between p-2.5 rounded-lg transition-all duration-150 cursor-pointer treatment-menu-container ${
+                                            className={`group relative flex items-center justify-between p-2.5 rounded-lg transition-all duration-150 cursor-pointer ${
                                               isActive
                                                 ? 'bg-blue-50/90 dark:bg-blue-950/60 border-2 border-blue-500 shadow-xs ring-1 ring-blue-400/40 scale-[1.01]'
                                                 : 'bg-white dark:bg-slate-955 border border-slate-200/60 dark:border-slate-800 hover:border-blue-300 dark:hover:border-blue-700'
                                             }`}
                                           >
                                             <div className="flex items-center gap-2 min-w-0">
-                                              <span className={`w-3.5 h-3.5 rounded-full ${cfg.dotColor} shrink-0`}></span>
+                                              <span className={`w-3.5 h-3.5 rounded-full ${colorCfg?.dotColor || 'bg-blue-500'} shrink-0`}></span>
                                               <span className={`text-[12px] truncate ${isActive ? 'font-bold text-blue-900 dark:text-blue-200' : 'font-semibold text-slate-700 dark:text-slate-300'}`}>
-                                                {cfg.name}
+                                                {catDef.displayName}
                                               </span>
+                                            </div>
+
+                                            <div className="flex items-center gap-1 shrink-0">
                                               {isActive && (
-                                                <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-blue-600 text-white tracking-wider shrink-0">
+                                                <span className="text-[9px] font-extrabold uppercase px-1.5 py-0.5 rounded bg-blue-600 text-white tracking-wider">
                                                   Active
                                                 </span>
                                               )}
+                                              {hasSubTreatments && (
+                                                <span className="text-[11px] font-bold text-slate-400 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                                                  ›
+                                                </span>
+                                              )}
                                             </div>
-
-                                            {isHoverMenuAvailable && (
-                                              <div
-                                                onClick={(e) => e.stopPropagation()}
-                                                className={`items-center gap-1 shrink-0 ml-1 bg-white dark:bg-slate-900 border border-blue-200 dark:border-blue-800 p-1 rounded-md shadow-xs transition-all ${
-                                                  isMenuOpen ? 'flex' : 'hidden group-hover:flex'
-                                                }`}
-                                              >
-                                                <button
-                                                  type="button"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handleSelectAllTeeth(cfg.name as "Scaling" | "Braces");
-                                                    setOpenTreatmentMenu(null);
-                                                  }}
-                                                  className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-955/60 dark:hover:bg-blue-900/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer"
-                                                >
-                                                  Select All
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    setActiveTreatment(cfg.name);
-                                                    setOpenTreatmentMenu(null);
-                                                    showToast(`Activated ${cfg.name} Custom Select mode. Click teeth to add/remove.`, "success");
-                                                  }}
-                                                  className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-700 dark:bg-blue-955/60 dark:hover:bg-blue-900/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800 transition-colors cursor-pointer"
-                                                >
-                                                  Custom Select
-                                                </button>
-                                              </div>
-                                            )}
                                           </div>
                                         );
                                       })}
@@ -8829,10 +10214,13 @@ ${clinicName}`;
                                         );
                                       }
 
-                                      // Group entries by procedure name and status
+                                      // Group entries by category, sub-treatment, and status
                                       interface TreatmentGroup {
                                         key: string;
+                                        category: string;
+                                        subTreatment?: string;
                                         procedure: string;
+                                        colorKey: string;
                                         status: string;
                                         teeth: Array<{ index: number; fdi: number }>;
                                       }
@@ -8846,21 +10234,17 @@ ${clinicName}`;
                                         const treatmentList = parseToothTreatments(val);
 
                                         treatmentList.forEach(statusStr => {
-                                          const colorConfig = getTreatmentColorConfig(statusStr);
-                                          const procedure = colorConfig?.name || statusStr.split(" (")[0].trim();
-
-                                          let status = "Planned";
-                                          if (String(statusStr).includes("Completed")) status = "Completed";
-                                          else if (String(statusStr).includes("In Progress")) status = "In Progress";
-                                          else if (String(statusStr).includes("Planned")) status = "Planned";
-
-                                          const groupKey = `${procedure}__${status}`;
+                                          const parsed = parseTreatmentEntry(statusStr);
+                                          const groupKey = `${parsed.category}__${parsed.subTreatment || ""}__${parsed.status}`;
 
                                           if (!groupMap[groupKey]) {
                                             groupMap[groupKey] = {
                                               key: groupKey,
-                                              procedure,
-                                              status,
+                                              category: parsed.category,
+                                              subTreatment: parsed.subTreatment,
+                                              procedure: parsed.subTreatment ? `${parsed.category} — ${parsed.subTreatment}` : parsed.category,
+                                              colorKey: parsed.colorKey,
+                                              status: parsed.status,
                                               teeth: []
                                             };
                                           }
@@ -8878,7 +10262,7 @@ ${clinicName}`;
                                       return (
                                         <div className="space-y-2.5 max-h-[260px] overflow-y-auto pr-1">
                                           {groups.map((group) => {
-                                            const colorConfig = TREATMENT_COLORS[group.procedure] || {
+                                            const colorConfig = TREATMENT_COLORS[group.colorKey] || TREATMENT_COLORS[group.category] || {
                                               dotColor: "bg-blue-500 border-blue-600",
                                               badgeBg: "bg-blue-50 border-blue-200 text-blue-800"
                                             };
@@ -8901,7 +10285,7 @@ ${clinicName}`;
                                                   <div className="flex items-center gap-2">
                                                     <span className={`w-3.5 h-3.5 rounded-full ${colorConfig.dotColor} shrink-0`}></span>
                                                     <span className="text-[13px] font-bold text-slate-900 dark:text-white tracking-wide uppercase">
-                                                      {group.procedure}
+                                                      {group.category}
                                                     </span>
                                                   </div>
                                                   <div className="flex items-center gap-2">
@@ -8917,7 +10301,14 @@ ${clinicName}`;
                                                         const currentChart = { ...(patientItem.dentalChart || {}) };
                                                         group.teeth.forEach(t => {
                                                           const list = parseToothTreatments(currentChart[t.index]);
-                                                          const filtered = list.filter(item => !item.toLowerCase().startsWith(group.procedure.toLowerCase()));
+                                                          const filtered = list.filter(item => {
+                                                            const p = parseTreatmentEntry(item);
+                                                            if (group.subTreatment) {
+                                                              return !(p.category.toLowerCase() === group.category.toLowerCase() &&
+                                                                       p.subTreatment?.toLowerCase() === group.subTreatment.toLowerCase());
+                                                            }
+                                                            return p.category.toLowerCase() !== group.category.toLowerCase();
+                                                          });
                                                           if (filtered.length === 0) {
                                                             delete currentChart[t.index];
                                                           } else {
@@ -8937,7 +10328,7 @@ ${clinicName}`;
                                                           return p;
                                                         }));
                                                         setEditTreatmentAdvised(formatTreatmentAdvisedFromChart(currentChart));
-                                                        setTreatments(prev => prev.filter(t => !(t.patient === patientItem.name && t.name.toLowerCase() === group.procedure.toLowerCase())));
+                                                        setTreatments(prev => prev.filter(t => !(t.patient === patientItem.name && t.name.toLowerCase().includes(group.procedure.toLowerCase()))));
                                                         showToast(`Removed ${group.procedure} record.`, "success");
                                                       }}
                                                       className="p-1 rounded-md text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 transition-all opacity-0 group-hover:opacity-100 cursor-pointer"
@@ -8948,15 +10339,23 @@ ${clinicName}`;
                                                   </div>
                                                 </div>
 
+                                                {/* Sub-Treatment bullet if present */}
+                                                {group.subTreatment && (
+                                                  <div className="flex items-center gap-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-300 pl-5.5">
+                                                    <span className="text-slate-400 dark:text-slate-500">•</span>
+                                                    <span>{group.subTreatment}</span>
+                                                  </div>
+                                                )}
+
                                                 {/* Teeth List */}
                                                 {group.teeth.length >= ALL_TEETH.length ? (
-                                                  <div className="pt-0.5">
+                                                  <div className="pt-0.5 pl-5.5">
                                                     <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200">
                                                       All Teeth
                                                     </span>
                                                   </div>
                                                 ) : (
-                                                  <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                                  <div className="flex items-center gap-1.5 flex-wrap pt-0.5 pl-5.5">
                                                     <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Teeth:</span>
                                                     {group.teeth.map((t, idx) => (
                                                       <span key={t.index} className="inline-flex items-center">
@@ -9002,8 +10401,8 @@ ${clinicName}`;
                             className="w-full rounded-md border border-slate-200 p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900"
                           />
                         ) : (
-                          <div className="min-h-[48px] print:min-h-0 p-2.5 print:p-2 bg-slate-50/60 dark:bg-slate-900/60 rounded border border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-normal">
-                            {editProvisionalDiagnosis || <span className="text-slate-400 italic">No provisional diagnosis recorded.</span>}
+                          <div className="min-h-[72px] print:min-h-[70px] p-2.5 print:p-2 bg-slate-50/60 dark:bg-slate-900/60 rounded border border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-normal print:bg-white print:border-slate-300">
+                            {editProvisionalDiagnosis || <span className="text-slate-400 italic print:hidden">No provisional diagnosis recorded.</span>}
                           </div>
                         )}
                       </div>
@@ -9022,16 +10421,17 @@ ${clinicName}`;
                             className="w-full rounded-md border border-slate-200 p-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-800 dark:bg-slate-900"
                           />
                         ) : (
-                          <div className="min-h-[48px] print:min-h-0 p-2.5 print:p-2 bg-slate-50/60 dark:bg-slate-900/60 rounded border border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-normal">
-                            {formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised || <span className="text-slate-400 italic">No treatment advised recorded.</span>}
+                          <div className="min-h-[72px] print:min-h-[70px] p-2.5 print:p-2 bg-slate-50/60 dark:bg-slate-900/60 rounded border border-slate-100 dark:border-slate-800 text-slate-800 dark:text-slate-200 whitespace-pre-wrap leading-relaxed font-normal print:bg-white print:border-slate-300">
+                            {formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised || <span className="text-slate-400 italic print:hidden">No treatment advised recorded.</span>}
                           </div>
                         )}
                       </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
+          )}
 
             {profileSubTab === "Treatments" && (
               <div className="space-y-6">
@@ -9068,7 +10468,7 @@ ${clinicName}`;
                         {treatments.filter(t => t.patient === patientItem.name).length > 0 ? (
                           treatments.filter(t => t.patient === patientItem.name).map((tr) => (
                             <tr key={tr.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-900/40">
-                              <td className="py-3 text-slate-500 font-normal">{tr.date || "12 Aug 2026"}</td>
+                              <td className="py-3 text-slate-500 font-normal">{tr.date || tr.nextVisit || dynamicTodayUiDate}</td>
                               <td className="py-3 font-bold text-slate-900 dark:text-white">{tr.name}</td>
                               <td className="py-3 text-slate-600 dark:text-slate-400 font-medium">{tr.tooth ? `#${tr.tooth}` : "-"}</td>
                               <td className="py-3 text-slate-600 dark:text-slate-400 font-medium">{tr.doctor || "Doctor"}</td>
@@ -9152,15 +10552,28 @@ ${clinicName}`;
                           <select
                             className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-xs focus:outline-none dark:border-slate-800 dark:bg-slate-900"
                             value={newTrName}
-                            onChange={e => {
-                              setNewTrName(e.target.value);
-                            }}
+                            onChange={e => setNewTrName(e.target.value)}
                             required
                           >
                             <option value="">-- Choose Procedure --</option>
-                            {COMMON_TREATMENTS.map(t => (
-                              <option key={t} value={t}>{t}</option>
-                            ))}
+                            {treatmentCategories.filter(c => c.isActive !== false).map(cat => {
+                              if (cat.subTreatments && cat.subTreatments.length > 0) {
+                                return (
+                                  <optgroup key={cat.id} label={cat.displayName}>
+                                    {cat.subTreatments.map(sub => (
+                                      <option key={sub} value={`${cat.name} — ${sub}`}>
+                                        {cat.name} — {sub}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                );
+                              }
+                              return (
+                                <option key={cat.id} value={cat.name}>
+                                  {cat.displayName}
+                                </option>
+                              );
+                            })}
                           </select>
                         </div>
                         <div className="grid grid-cols-2 gap-4">
@@ -9274,7 +10687,7 @@ ${clinicName}`;
                             required
                           >
                             <option value="">-- Select --</option>
-                            {COMMON_TREATMENTS.map(t => (
+                            {ALL_TREATMENTS.map(t => (
                               <option key={t} value={t}>{t}</option>
                             ))}
                           </select>
@@ -9455,58 +10868,384 @@ ${clinicName}`;
 
             {profileSubTab === "Invoices" && (
               <div className="space-y-6 animate-fadeIn">
-                {/* Billing invoice creation form */}
-                <form onSubmit={handleSaveInvoice} className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs space-y-4 text-xs">
-                  <span className="font-bold text-sm block border-b pb-2 mb-2">Create New Billing Invoice</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                    <div>
-                      <Label>Procedure / Item</Label>
-                      <select
-                        className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-xs focus:outline-none dark:border-slate-800 dark:bg-slate-900"
-                        value={invProcedure}
-                        onChange={e => {
-                          setInvProcedure(e.target.value);
-                        }}
-                        required
-                      >
-                        <option value="">-- Choose Procedure --</option>
-                        {COMMON_TREATMENTS.map(t => (
-                          <option key={t} value={t}>{t}</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <Label>Procedure Amount (₹)</Label>
-                      <Input type="number" value={invAmount} onChange={e => setInvAmount(e.target.value)} required />
-                    </div>
-                    <div>
-                      <Label>Discount (%)</Label>
-                      <Input type="number" min="0" max="100" value={invDiscount} onChange={e => setInvDiscount(e.target.value)} />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <Label>Paid Amount (₹)</Label>
-                      <Input type="number" min="0" value={invPaid} onChange={e => setInvPaid(e.target.value)} />
-                    </div>
-                    <div>
-                      <Label>Payment Mode</Label>
-                      <select
-                        className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-xs focus:outline-none dark:border-slate-800 dark:bg-slate-900"
-                        value={invMode}
-                        onChange={e => setInvMode(e.target.value)}
-                      >
-                        <option value="UPI GPay">UPI / GPay</option>
-                        <option value="Cash">Cash</option>
-                        <option value="Card Swipe">Card</option>
-                        <option value="Bank Transfer">Net Banking</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="flex justify-end gap-3 pt-2">
-                    <Button type="submit" className="h-9 px-4 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded">Save Invoice</Button>
-                  </div>
-                </form>
+                {/* Clean, Structured Multi-Treatment Invoice Creation Form (Matching Sameeksha Workflow) */}
+                {(() => {
+                  const currentPat = patients.find(p => p.id === selectedPatientId);
+                  const { subtotal, discountAmount, totalPayable, paid, balanceDue } = calculateInvoiceFormValues();
+
+                  return (
+                    <form
+                      onSubmit={(e) => handleSaveMultiTreatmentInvoice(e, selectedPatientId)}
+                      className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 sm:p-6 shadow-xs space-y-5 text-xs animate-fadeIn"
+                    >
+                      {/* Top Bar: Title & Manually Enterable Invoice ID */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200 dark:border-slate-800">
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="h-8 w-8 rounded-lg bg-blue-50 dark:bg-blue-950/60 flex items-center justify-center text-[#00529b] dark:text-blue-400">
+                              <Receipt className="h-4 w-4" />
+                            </span>
+                            <span className="font-bold text-sm text-slate-900 dark:text-white">
+                              Create Multi-Treatment Invoice
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500">
+                            Prepares an official tax invoice on 32 Smiles Multispeciality Dental Clinic letterhead stationery
+                          </p>
+                        </div>
+
+                        {/* Invoice Number & Date Fields */}
+                        <div className="flex flex-wrap items-center gap-3 bg-slate-50 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                          <div>
+                            <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                              Invoice ID (Editable)
+                            </label>
+                            <input
+                              type="text"
+                              value={invoiceCustomId || getNextInvoiceId()}
+                              onChange={(e) => setInvoiceCustomId(e.target.value)}
+                              placeholder="e.g. INV-1001"
+                              className="h-8 px-2.5 w-32 font-bold text-xs text-[#00529b] dark:text-blue-400 bg-white dark:bg-slate-900 rounded-lg border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              required
+                            />
+                          </div>
+
+                          <div className="border-l border-slate-200 dark:border-slate-800 pl-3">
+                            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                              Invoice Date
+                            </span>
+                            <span className="font-semibold text-xs text-slate-800 dark:text-slate-200 leading-8">
+                              {getTodayKolkataUiDate()}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Patient Details Banner (Selected Patient Name, ID, Age, Gender) */}
+                      {currentPat && (
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 rounded-xl p-3 text-xs">
+                          <div>
+                            <span className="text-[10.5px] font-bold text-slate-500 block">Patient Name</span>
+                            <span className="font-bold text-slate-900 dark:text-white text-xs">{currentPat.name}</span>
+                          </div>
+                          <div>
+                            <span className="text-[10.5px] font-bold text-slate-500 block">Patient ID / OP #</span>
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">{currentPat.id}</span>
+                          </div>
+                          <div>
+                            <span className="text-[10.5px] font-bold text-slate-500 block">Age / Gender</span>
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">
+                              {currentPat.age ? `${currentPat.age} Yrs` : "-"} / {currentPat.gender || "-"}
+                            </span>
+                          </div>
+                          <div>
+                            <span className="text-[10.5px] font-bold text-slate-500 block">Phone</span>
+                            <span className="font-semibold text-slate-800 dark:text-slate-200">{currentPat.phone || "-"}</span>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Multi-Treatment Rows Table */}
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                            Treatments / Procedures
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            {invoiceTreatmentRows.length} {invoiceTreatmentRows.length === 1 ? "treatment line" : "treatment lines"}
+                          </span>
+                        </div>
+
+                        <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-2xs">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-slate-100/80 dark:bg-slate-900/80 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold uppercase tracking-wider">
+                                <th className="py-2.5 px-3 text-center w-12">#</th>
+                                <th className="py-2.5 px-3">Treatment / Procedure Details</th>
+                                <th className="py-2.5 px-3 text-center w-24">Qty</th>
+                                <th className="py-2.5 px-3 text-right w-36">Unit Price (₹)</th>
+                                <th className="py-2.5 px-3 text-right w-36">Line Total (₹)</th>
+                                <th className="py-2.5 px-3 text-center w-14">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-950">
+                              {invoiceTreatmentRows.map((row, idx) => {
+                                const lineTotal = (Number(row.quantity) || 1) * (Number(row.unitPrice) || 0);
+
+                                return (
+                                  <tr key={row.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20">
+                                    <td className="py-2.5 px-3 text-center font-bold text-slate-500 text-xs">
+                                      {idx + 1}
+                                    </td>
+                                    <td className="py-2.5 px-3">
+                                      <div className="space-y-1.5">
+                                        <select
+                                          className="h-8 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                          value={row.description}
+                                          onChange={(e) => handleUpdateTreatmentRow(row.id, "description", e.target.value)}
+                                        >
+                                          <option value="">-- Select from Treatment Catalogue --</option>
+                                          {TREATMENT_CATEGORIES.map((cat) => (
+                                            <optgroup key={cat.id} label={cat.displayName || cat.name}>
+                                              <option value={cat.name}>{cat.name}</option>
+                                              {cat.subTreatments?.map((sub) => (
+                                                <option key={sub} value={`${cat.name} - ${sub}`}>
+                                                  &nbsp;&nbsp;↳ {sub}
+                                                </option>
+                                              ))}
+                                            </optgroup>
+                                          ))}
+                                        </select>
+                                        <input
+                                          type="text"
+                                          placeholder="Or specify custom description / tooth number..."
+                                          value={row.description}
+                                          onChange={(e) => handleUpdateTreatmentRow(row.id, "description", e.target.value)}
+                                          className="h-7 w-full rounded border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 px-2 text-[11px] text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                        />
+                                      </div>
+                                    </td>
+                                    <td className="py-2.5 px-3 text-center align-top pt-3">
+                                      <input
+                                        type="number"
+                                        min="1"
+                                        value={row.quantity}
+                                        onChange={(e) => handleUpdateTreatmentRow(row.id, "quantity", e.target.value)}
+                                        className="h-8 w-16 text-center rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 mx-auto block"
+                                      />
+                                    </td>
+                                    <td className="py-2.5 px-3 text-right align-top pt-3">
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="any"
+                                        placeholder="0.00"
+                                        value={row.unitPrice}
+                                        onChange={(e) => handleUpdateTreatmentRow(row.id, "unitPrice", e.target.value)}
+                                        className="h-8 w-28 text-right rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 ml-auto block"
+                                      />
+                                    </td>
+                                    <td className="py-2.5 px-3 text-right align-top pt-4 font-bold text-xs text-slate-900 dark:text-white">
+                                      ₹{lineTotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                    </td>
+                                    <td className="py-2.5 px-3 text-center align-top pt-3">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRemoveTreatmentRow(row.id)}
+                                        className="h-8 w-8 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center justify-center transition-colors mx-auto cursor-pointer"
+                                        title="Remove treatment row"
+                                      >
+                                        <Trash2 className="h-4 w-4" />
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {/* Add Treatment Row Button */}
+                        <div className="flex justify-between items-center pt-1">
+                          <button
+                            type="button"
+                            onClick={handleAddTreatmentRow}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-xl border border-blue-200 dark:border-blue-900 transition-colors cursor-pointer"
+                          >
+                            <Plus className="h-4 w-4" /> Add Treatment
+                          </button>
+
+                          <span className="text-[11px] text-slate-500">
+                            Subtotal of treatments: <strong className="text-slate-800 dark:text-slate-200">₹{subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Payment & Financial Calculations (2 Columns matching Sameeksha) */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                        {/* Left Column: Doctor, Payment Mode, Paid Amount */}
+                        <div className="space-y-3.5 bg-slate-50/70 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                          <span className="font-bold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 block">
+                            Payment Details
+                          </span>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div>
+                              <Label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Attending Doctor</Label>
+                              <select
+                                className="mt-1 flex h-8 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900"
+                                value={invoiceDoctor}
+                                onChange={(e) => setInvoiceDoctor(e.target.value)}
+                              >
+                                {doctors.length > 0 ? (
+                                  doctors.map((d) => (
+                                    <option key={d.name} value={d.name}>{d.name}</option>
+                                  ))
+                                ) : (
+                                  <option value="Dr. Deepa Kodali">Dr. Deepa Kodali</option>
+                                )}
+                              </select>
+                            </div>
+
+                            <div>
+                              <Label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Payment Mode</Label>
+                              <select
+                                className="mt-1 flex h-8 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900"
+                                value={invoicePaymentMode}
+                                onChange={(e) => setInvoicePaymentMode(e.target.value)}
+                              >
+                                <option value="Cash">Cash</option>
+                                <option value="UPI GPay">UPI / GPay</option>
+                                <option value="Card Swipe">Card</option>
+                                <option value="Bank Transfer">Net Banking</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="flex justify-between items-center mb-1">
+                              <Label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Paid Amount (₹)</Label>
+                              <div className="flex gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => setInvoicePaidAmount(String(totalPayable))}
+                                  className="text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:underline px-1 cursor-pointer"
+                                >
+                                  Full (₹{totalPayable.toLocaleString()})
+                                </button>
+                                <span className="text-slate-300">•</span>
+                                <button
+                                  type="button"
+                                  onClick={() => setInvoicePaidAmount("0")}
+                                  className="text-[10px] font-bold text-slate-500 hover:underline px-1 cursor-pointer"
+                                >
+                                  Zero (₹0)
+                                </button>
+                              </div>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              step="any"
+                              value={invoicePaidAmount}
+                              onChange={(e) => setInvoicePaidAmount(e.target.value)}
+                              className="h-9 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-xs font-bold text-emerald-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                              placeholder="0.00"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Right Column: Calculations & Totals (Structured Summary Box) */}
+                        <div className="space-y-2.5 bg-slate-50/70 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                          <span className="font-bold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 block">
+                            Invoice Calculation Summary
+                          </span>
+
+                          <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
+                            <span className="font-semibold">Subtotal:</span>
+                            <span className="font-bold text-slate-900 dark:text-white">
+                              ₹{subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+
+                          {/* Discount Input Row */}
+                          <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800">
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-semibold text-slate-600 dark:text-slate-400">Discount:</span>
+                                <div className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5 text-[10px]">
+                                  <button
+                                    type="button"
+                                    onClick={() => setInvoiceDiscountType("percentage")}
+                                    className={`px-1.5 py-0.5 rounded font-bold cursor-pointer transition-colors ${
+                                      invoiceDiscountType === "percentage"
+                                        ? "bg-blue-600 text-white"
+                                        : "text-slate-500 hover:text-slate-800"
+                                    }`}
+                                  >
+                                    %
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setInvoiceDiscountType("fixed")}
+                                    className={`px-1.5 py-0.5 rounded font-bold cursor-pointer transition-colors ${
+                                      invoiceDiscountType === "fixed"
+                                        ? "bg-blue-600 text-white"
+                                        : "text-slate-500 hover:text-slate-800"
+                                    }`}
+                                  >
+                                    ₹ Fixed
+                                  </button>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={invoiceDiscountValue}
+                                  onChange={(e) => setInvoiceDiscountValue(e.target.value)}
+                                  className="h-7 w-20 text-right rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                  placeholder="0"
+                                />
+                                {discountAmount > 0 && (
+                                  <span className="text-rose-600 font-bold text-xs">
+                                    -₹{discountAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Total Payable */}
+                          <div className="pt-2 border-t-2 border-slate-300 dark:border-slate-700 flex justify-between items-center text-sm font-extrabold text-[#00529b] dark:text-blue-400">
+                            <span>Total Payable:</span>
+                            <span className="text-base font-black">
+                              ₹{totalPayable.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+
+                          {/* Paid Amount */}
+                          <div className="flex justify-between items-center text-xs font-bold text-emerald-600">
+                            <span>Amount Paid:</span>
+                            <span>₹{paid.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                          </div>
+
+                          {/* Balance Due */}
+                          <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center text-xs font-bold">
+                            <span className="text-slate-700 dark:text-slate-300">Balance Due:</span>
+                            <span className={balanceDue > 0 ? "text-amber-600 dark:text-amber-400 font-extrabold" : "text-emerald-600 font-semibold"}>
+                              {balanceDue > 0
+                                ? `₹${balanceDue.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                                : "✓ Nil (Fully Paid)"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Footer Actions: Save & Generate Invoice */}
+                      <div className="flex flex-col sm:flex-row justify-end items-center gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={resetMultiTreatmentForm}
+                          className="h-10 px-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-900 text-slate-700 dark:text-slate-300 font-bold transition-colors cursor-pointer w-full sm:w-auto"
+                        >
+                          Reset Form
+                        </button>
+
+                        <Button
+                          type="submit"
+                          disabled={isSavingMultiInvoice}
+                          className="h-10 px-6 bg-[#00529b] hover:bg-[#00417c] text-white font-extrabold rounded-xl shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 cursor-pointer w-full sm:w-auto"
+                        >
+                          <Receipt className="h-4 w-4" />
+                          {isSavingMultiInvoice ? "Saving & Generating..." : "Save & Generate Invoice"}
+                        </Button>
+                      </div>
+                    </form>
+                  );
+                })()}
 
                 {/* Invoices List */}
                 <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs text-xs space-y-3">
@@ -9546,7 +11285,7 @@ ${clinicName}`;
                                   onClick={async () => {
                                     const { error } = await supabase
                                       .from("billing")
-                                      .update({ status: "Paid", paid_amount: inv.total, payment_date: new Date().toISOString().split("T")[0] })
+                                      .update({ status: "Paid", paid_amount: inv.total, payment_date: getTodayKolkataDbDate() })
                                       .eq("invoice_id", inv.id);
 
                                     if (error) {
@@ -9570,7 +11309,6 @@ ${clinicName}`;
                               )}
                               <button
                                 onClick={() => {
-                                  alert(`Print layout prepared for receipt ${inv.id}.`);
                                   setLastGeneratedReceipt(inv);
                                 }}
                                 className="text-blue-600 hover:underline font-bold"
@@ -9652,16 +11390,16 @@ ${clinicName}`;
                       return (
                         <div key={idx} className="p-3 bg-slate-50/60 dark:bg-slate-900/40 border border-slate-200/80 dark:border-slate-800 rounded-xl space-y-3">
                           <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-start">
-                            {/* Medicine Name & Catalogue Selection */}
+                            {/* Medicine Name & Category-Based Catalogue Selection */}
                             <div className="md:col-span-4 space-y-1">
                               <Label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Medicine Name</Label>
-                              <select
+                              <MedicineCategorySelector
                                 value={med.name}
-                                onChange={e => {
-                                  const selectedVal = e.target.value;
+                                medicines={medicines}
+                                onChange={(selectedVal, matchedOption) => {
                                   const copy = [...prescMeds];
                                   copy[idx].name = selectedVal;
-                                  const matched = medicines.find(m => m.name === selectedVal);
+                                  const matched = matchedOption || medicines.find(m => m.name.toLowerCase() === selectedVal.toLowerCase());
                                   if (matched) {
                                     (copy[idx] as any).medicine_id = matched.id;
                                     (copy[idx] as any).stock_unit = matched.stock_unit;
@@ -9669,29 +11407,18 @@ ${clinicName}`;
                                   }
                                   setPrescMeds(copy);
                                 }}
-                                className="mt-1 flex h-9 w-full rounded-md border border-slate-200 bg-white dark:bg-slate-900 px-3 py-1 text-xs focus:outline-none dark:border-slate-800 text-slate-900 dark:text-white"
-                              >
-                                <option value="">-- Select from Inventory Catalogue --</option>
-                                {medicines.filter(m => m.is_active).map(m => {
-                                  const status = getMedicineStockStatus(m);
-                                  const availStr = m.available_quantity !== null && m.available_quantity !== undefined ? `${m.available_quantity} ${m.stock_unit}` : "Unset";
-                                  const label = `${m.name} — Available: ${availStr} (${status.replace("_", " ")})`;
-                                  const isSelectable = status === "in_stock" || status === "low_stock";
-                                  return (
-                                    <option key={m.id} value={m.name} disabled={!isSelectable}>
-                                      {label} {!isSelectable ? " [Unavailable]" : ""}
-                                    </option>
-                                  );
-                                })}
-                              </select>
+                              />
                               {(() => {
-                                const matched = medicines.find(m => m.name === med.name);
+                                const matched = medicines.find(m => m.name.toLowerCase() === med.name.toLowerCase());
                                 if (!matched) return null;
-                                const status = getMedicineStockStatus(matched);
+                                const cat = matched.category || getCategoryForMedicine(matched.name);
                                 return (
-                                  <div className="flex items-center gap-2 pt-0.5">
-                                    <span className="text-[10px] text-slate-500 font-medium">Unit: {matched.stock_unit}</span>
-                                    {renderStockStatusBadge(status)}
+                                  <div className="flex items-center gap-1.5 pt-0.5 text-[10px] text-slate-500 font-medium">
+                                    <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300 font-semibold">
+                                      {cat}
+                                    </span>
+                                    {matched.dosage_form && <span>• {matched.dosage_form}</span>}
+                                    {matched.stock_unit && <span className="capitalize">• {matched.stock_unit}</span>}
                                   </div>
                                 );
                               })()}
@@ -9820,16 +11547,49 @@ ${clinicName}`;
                     <Input value={prescAdvice} onChange={e => setPrescAdvice(e.target.value)} placeholder="Follow-up warnings..." />
                   </div>
 
-                  <div className="flex gap-3 justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
+                  <div className="flex flex-wrap gap-2.5 justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
                     <Button
                       type="button"
-                      onClick={handlePrintPrescription}
-                      className="h-9 px-4 rounded border border-slate-900 bg-slate-900 text-white hover:bg-[#333333] hover:text-white focus:outline-none focus:ring-2 focus:ring-slate-400 focus:text-white active:bg-black active:text-white dark:bg-slate-900 dark:text-white dark:hover:bg-[#333333] dark:hover:text-white font-semibold transition-colors duration-200 flex items-center gap-2 cursor-pointer shadow-xs"
+                      onClick={() => {
+                        const patientItem = patients.find(p => p.id === selectedPatientId);
+                        if (!patientItem) {
+                          showToast("Please select a patient first.", "error");
+                          return;
+                        }
+                        setActivePrintPrescription({
+                          doctorName: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+                          date: prescDate,
+                          diagnosis: prescDiagnosis,
+                          medicines: prescMeds.filter(m => m.name.trim()),
+                          advice: prescAdvice,
+                        });
+                        setShowPrescriptionPreviewModal(true);
+                      }}
+                      className="h-9 px-3.5 rounded border border-blue-600/40 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800 font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                    >
+                      <Eye className="h-4 w-4" />
+                      Preview Template
+                    </Button>
+
+                    <Button
+                      type="button"
+                      onClick={() => handleDownloadPrescriptionPDF()}
+                      className="h-9 px-3.5 rounded border border-emerald-600/40 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                    >
+                      <Download className="h-4 w-4" />
+                      Download PDF
+                    </Button>
+
+                    <Button
+                      type="button"
+                      onClick={() => handlePrintPrescription()}
+                      className="h-9 px-3.5 rounded border border-slate-900 bg-slate-900 text-white hover:bg-[#333333] hover:text-white font-semibold transition-colors duration-200 flex items-center gap-1.5 cursor-pointer shadow-xs"
                     >
                       <Printer className="h-4 w-4 text-white" />
                       Print Prescription
                     </Button>
-                    <Button type="submit" className="h-9 px-4 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold">
+
+                    <Button type="submit" className="h-9 px-4 rounded bg-blue-600 hover:bg-blue-500 text-white font-semibold shadow-xs">
                       Save Prescription
                     </Button>
                   </div>
@@ -9962,6 +11722,25 @@ ${clinicName}`;
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const parsed = parsePrescriptionString(pr);
+                                setActivePrintPrescription({
+                                  doctorName: prescRec?.doctor_name || prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+                                  date: prescRec?.prescription_date || "",
+                                  diagnosis: prescRec?.diagnosis || "",
+                                  medicines: [parsed],
+                                  advice: prescRec?.advice || "",
+                                });
+                                setShowPrescriptionPreviewModal(true);
+                              }}
+                              className="px-2.5 py-1 rounded-lg border border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold text-[11px] flex items-center gap-1 cursor-pointer transition-colors"
+                              title="Preview & print on official template"
+                            >
+                              <Eye className="h-3.5 w-3.5 text-blue-600" /> View / Print
+                            </button>
+
                             {isDispensed ? (
                               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-400 border border-emerald-200">
                                 Dispensed
@@ -10009,220 +11788,536 @@ ${clinicName}`;
                   )}
                 </div>
 
-                {/* Printable Prescription Document Layout (Visible ONLY during print) */}
-                {selectedPatientId && (
-                  <div id="print-area" className="hidden print:block bg-white text-slate-900 p-8 max-w-[210mm] mx-auto text-xs space-y-6 font-sans">
-                    {/* Clinic Header */}
-                    <div className="border-b-2 border-slate-800 pb-4 mb-4 flex justify-between items-start print:break-inside-avoid">
-                      <div className="space-y-1">
-                        <h1 className="text-xl font-bold text-blue-900 tracking-tight">{clinicName || "32 Smiles Dental Clinic"}</h1>
-                        <p className="text-xs text-slate-600 font-medium">32 Smiles Dental Clinic, Main Road</p>
-                        <p className="text-xs text-slate-800 font-bold">PH: +91 98765 43210</p>
-                      </div>
-                      <div className="text-right space-y-1">
-                        <span className="text-lg font-black text-blue-900 uppercase tracking-wider block">PRESCRIPTION</span>
-                        <p className="text-xs text-slate-600 font-medium">Date: {prescDate || new Date().toISOString().split("T")[0]}</p>
-                      </div>
-                    </div>
+                {/* MODAL: INTERACTIVE ON-SCREEN PRESCRIPTION PREVIEW (OFFICIAL V.R. DENTAL CARE TEMPLATE) */}
+                {showPrescriptionPreviewModal && selectedPatientId && (() => {
+                  const pItem = patients.find(p => p.id === selectedPatientId);
+                  if (!pItem) return null;
 
-                    {/* Patient & Doctor Details Card */}
-                    {(() => {
-                      const pItem = patients.find(p => p.id === selectedPatientId);
-                      if (!pItem) return null;
-                      const ageGender = `${pItem.age || ""} ${pItem.gender || ""}`.trim();
-                      const docName = prescDoctor || (doctors[0]?.name || "Doctor / Dentist");
-                      const medNotes = pItem.medicalNotes || (pItem as any).medicalConditions || "None";
+                  const currentData = activePrintPrescription || {
+                    doctorName: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+                    date: prescDate,
+                    diagnosis: prescDiagnosis,
+                    medicines: prescMeds.filter(m => m.name.trim()),
+                    advice: prescAdvice,
+                  };
 
-                      return (
-                        <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 grid grid-cols-2 gap-x-6 gap-y-2 text-xs print:break-inside-avoid">
+                  return (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-4 overflow-y-auto print:hidden">
+                      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[95vh] flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800 animate-fadeIn">
+                        {/* Modal Header */}
+                        <div className="px-6 py-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-950">
                           <div>
-                            <span className="font-bold text-slate-700">Patient Name: </span>
-                            <span className="font-semibold text-slate-900">{pItem.name}</span>
+                            <h3 className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-2">
+                              <FileText className="h-5 w-5 text-blue-600" />
+                              Official Prescription Template Preview
+                            </h3>
+                            <p className="text-xs text-slate-500">
+                              Patient: <strong className="text-slate-800 dark:text-slate-300">{pItem.name}</strong> • 32 Smiles Multispeciality Dental Clinic
+                            </p>
                           </div>
-                          <div>
-                            <span className="font-bold text-slate-700">Doctor: </span>
-                            <span className="font-semibold text-slate-900">{docName}</span>
+                          <div className="flex items-center gap-2">
+                            <Button
+                              type="button"
+                              onClick={() => handleDownloadPrescriptionPDF(currentData)}
+                              className="h-8 px-3 rounded text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            >
+                              <Download className="h-3.5 w-3.5" /> Download PDF
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={() => {
+                                setActivePrintPrescription(currentData);
+                                setActivePrintDoc("prescription");
+                                setTimeout(() => window.print(), 50);
+                              }}
+                              className="h-8 px-3 rounded text-xs bg-slate-900 hover:bg-slate-800 text-white font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                            >
+                              <Printer className="h-3.5 w-3.5" /> Print
+                            </Button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowPrescriptionPreviewModal(false);
+                                setActivePrintPrescription(null);
+                              }}
+                              className="h-8 w-8 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-800 dark:hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                            >
+                              <X className="h-4 w-4" />
+                            </button>
                           </div>
-                          <div>
-                            <span className="font-bold text-slate-700">Patient ID: </span>
-                            <span className="font-semibold text-slate-900">{pItem.id}</span>
-                          </div>
-                          <div>
-                            <span className="font-bold text-slate-700">Prescription Date: </span>
-                            <span className="font-semibold text-slate-900">{prescDate || new Date().toISOString().split("T")[0]}</span>
-                          </div>
-                          {ageGender && (
-                            <div>
-                              <span className="font-bold text-slate-700">Age / Gender: </span>
-                              <span className="font-semibold text-slate-900">{ageGender}</span>
-                            </div>
-                          )}
-                          {pItem.phone && (
-                            <div>
-                              <span className="font-bold text-slate-700">Contact: </span>
-                              <span className="font-semibold text-slate-900">{pItem.phone}</span>
-                            </div>
-                          )}
-                          {medNotes && medNotes !== "None" && (
-                            <div className="col-span-2 mt-1 pt-1 border-t border-slate-200">
-                              <span className="font-bold text-red-700">Medical Notes / Allergies: </span>
-                              <span className="font-semibold text-slate-900">{medNotes}</span>
-                            </div>
-                          )}
                         </div>
-                      );
-                    })()}
 
-                    {/* Diagnosis Notes */}
-                    {prescDiagnosis.trim() && (
-                      <div className="space-y-1.5 print:break-inside-avoid">
-                        <h3 className="font-bold text-sm text-blue-900 uppercase tracking-wide border-b border-slate-200 pb-1">Diagnosis / Clinical Notes</h3>
-                        <p className="text-xs text-slate-800 whitespace-pre-wrap leading-relaxed pl-1">{prescDiagnosis.trim()}</p>
-                      </div>
-                    )}
-
-                    {/* Medicines Prescribed Table */}
-                    {prescMeds.length > 0 && (
-                      <div className="space-y-2 print:break-inside-avoid">
-                        <h3 className="font-bold text-sm text-blue-900 uppercase tracking-wide border-b border-slate-200 pb-1">Medicines Prescribed</h3>
-                        <table className="w-full border-collapse border border-slate-300 text-xs">
-                          <thead>
-                            <tr className="bg-blue-900 text-white">
-                              <th className="border border-slate-300 px-2.5 py-1.5 text-center w-8">#</th>
-                              <th className="border border-slate-300 px-3 py-1.5 text-left font-bold">Medicine Name</th>
-                              <th className="border border-slate-300 px-3 py-1.5 text-left">Dosage / Frequency</th>
-                              <th className="border border-slate-300 px-3 py-1.5 text-left">Meal Timing</th>
-                              <th className="border border-slate-300 px-3 py-1.5 text-left">Duration</th>
-                              <th className="border border-slate-300 px-3 py-1.5 text-left">Special Instructions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {prescMeds.map((med, idx) => {
-                              const parsed = parseDosageString(med.dosage);
-                              const times: string[] = [];
-                              if (parsed.morning) times.push("Morning");
-                              if (parsed.afternoon) times.push("Afternoon");
-                              if (parsed.night) times.push("Night");
-
-                              const timeStr = times.join(", ") || "-";
-                              let mealStr = "-";
-                              if (parsed.beforeMeals) mealStr = "Before Meals";
-                              else if (parsed.afterMeals) mealStr = "After Meals";
-
-                              return (
-                                <tr key={idx} className={idx % 2 === 0 ? "bg-white" : "bg-slate-50/80"} style={{ pageBreakInside: "avoid" }}>
-                                  <td className="border border-slate-300 px-2.5 py-2 text-center font-medium">{idx + 1}</td>
-                                  <td className="border border-slate-300 px-3 py-2 font-bold text-slate-900">{med.name.trim() || "-"}</td>
-                                  <td className="border border-slate-300 px-3 py-2 text-slate-800">{timeStr}</td>
-                                  <td className="border border-slate-300 px-3 py-2 text-slate-800">{mealStr}</td>
-                                  <td className="border border-slate-300 px-3 py-2 text-slate-800">{med.duration.trim() || "-"}</td>
-                                  <td className="border border-slate-300 px-3 py-2 text-slate-800">{med.instructions.trim() || "-"}</td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-
-                    {/* Doctor Advice / Instructions */}
-                    {prescAdvice.trim() && (
-                      <div className="space-y-1.5 print:break-inside-avoid">
-                        <h3 className="font-bold text-sm text-blue-900 uppercase tracking-wide border-b border-slate-200 pb-1">Doctor Advice / Instructions</h3>
-                        <p className="text-xs text-slate-800 whitespace-pre-wrap leading-relaxed pl-1">{prescAdvice.trim()}</p>
-                      </div>
-                    )}
-
-                    {/* Doctor Signature Block */}
-                    <div className="pt-8 flex justify-end print:break-inside-avoid">
-                      <div className="text-right space-y-6">
-                        <p className="text-xs font-bold text-slate-900">
-                          Doctor: {prescDoctor || (doctors[0]?.name || "Doctor / Dentist")}
-                        </p>
-                        <p className="text-xs text-slate-700">
-                          Signature: __________________________
-                        </p>
+                        {/* Modal Body with Zoom / Scroll */}
+                        <div className="flex-1 overflow-y-auto p-2 sm:p-6 bg-slate-200/80 dark:bg-slate-950/80 flex justify-center shadow-inner">
+                          <ResponsivePdfPreview
+                            pageCount={2}
+                            pageHeightPx={1059}
+                            title="Official Prescription"
+                          >
+                            <PrescriptionPrintTemplate
+                              patient={pItem}
+                              doctorName={currentData.doctorName}
+                              date={currentData.date}
+                              diagnosis={currentData.diagnosis}
+                              medicines={currentData.medicines}
+                              advice={currentData.advice}
+                              parseDosageFn={parseDosageString}
+                            />
+                          </ResponsivePdfPreview>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
               </div>
             )}
 
             {profileSubTab === "Files" && (
               <div className="space-y-6 animate-fadeIn">
-                {/* Mock Upload Form */}
-                <form onSubmit={handleUploadFile} className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs space-y-4 text-xs">
-                  <span className="font-bold text-sm block border-b pb-2 mb-2">Attach Patient Scanning File</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {/* Real File Upload Card */}
+                <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs space-y-4">
+                  <div className="border-b border-slate-100 dark:border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
                     <div>
-                      <Label>File Name</Label>
-                      <Input value={newFileName} onChange={e => setNewFileName(e.target.value)} placeholder="e.g. panorex_xray_final.png" required />
+                      <span className="font-bold text-sm text-slate-900 dark:text-white block">Attach Patient Scanning & Clinical Files</span>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                        Securely upload dental X-rays, OPG scans, clinical photos, and PDF documents directly into private storage.
+                      </p>
                     </div>
-                    <div>
-                      <Label>File Type Category</Label>
-                      <select
-                        className="flex h-9 w-full rounded-md border border-slate-200 bg-transparent px-3 py-1 text-xs focus:outline-none dark:border-slate-800 dark:bg-slate-900"
-                        value={newFileType}
-                        onChange={e => setNewFileType(e.target.value)}
-                      >
-                        <option value="X-Ray Scan">X-Ray Scan</option>
-                        <option value="Intraoral Photo">Intraoral Photo</option>
-                        <option value="Prescription PDF">Prescription PDF</option>
-                        <option value="Clinical PDF">Clinical Report</option>
-                        <option value="Billing Statement">Billing Statement</option>
-                      </select>
-                    </div>
-                    <div className="flex items-end">
-                      <Button type="submit" className="h-9 w-full bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded">
-                        Upload Scan
-                      </Button>
-                    </div>
+                    <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-900 px-2.5 py-1 rounded-full self-start sm:self-auto">
+                      Private Encrypted Bucket
+                    </span>
                   </div>
-                </form>
 
-                {/* Uploaded Files Table list */}
-                <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs text-xs font-semibold space-y-3">
-                  <span className="font-bold text-sm block mb-2 border-b pb-2">Patient Files Uploads</span>
-                  {patientItem.files.length > 0 ? (
-                    patientItem.files.map((file, idx) => (
-                      <div key={idx} className="p-3 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-5 w-5 text-blue-500" />
-                          <div>
-                            <span className="font-bold block text-slate-850 dark:text-slate-100">{file.name}</span>
-                            <p className="text-[10px] text-slate-400">{file.size || "1.8 MB"} • {file.type || "PNG Scan File"}</p>
+                  <form onSubmit={handleUploadFile} className="space-y-4 text-xs">
+                    {/* Hidden Native File Input */}
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      className="hidden"
+                      accept=".pdf,image/png,image/jpeg,image/webp,image/gif,image/svg+xml,.dcm,.dicom,.doc,.docx,.txt"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          setSelectedUploadFile(file);
+                          // Pre-fill display name if empty
+                          if (!newFileName.trim()) {
+                            setNewFileName(file.name);
+                          }
+                        }
+                      }}
+                    />
+
+                    {/* Drag-and-drop or Browse Zone */}
+                    <div
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const file = e.dataTransfer.files?.[0];
+                        if (file) {
+                          setSelectedUploadFile(file);
+                          if (!newFileName.trim()) {
+                            setNewFileName(file.name);
+                          }
+                        }
+                      }}
+                      className={`border-2 border-dashed rounded-xl p-5 text-center transition-all ${
+                        selectedUploadFile
+                          ? "border-blue-400 bg-blue-50/40 dark:bg-blue-950/20 dark:border-blue-800"
+                          : "border-slate-300 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-900/40 hover:border-blue-400 hover:bg-slate-50 dark:hover:bg-slate-900"
+                      }`}
+                    >
+                      {!selectedUploadFile ? (
+                        <div className="flex flex-col items-center justify-center space-y-2 py-2">
+                          <div className="h-10 w-10 rounded-full bg-blue-100 dark:bg-blue-950/80 text-blue-600 dark:text-blue-400 flex items-center justify-center">
+                            <Upload className="h-5 w-5" />
+                          </div>
+                          <div className="space-y-1">
+                            <p className="font-semibold text-slate-800 dark:text-slate-200 text-xs">
+                              Drag and drop your scan or document here, or click Choose File
+                            </p>
+                            <p className="text-[11px] text-slate-400">
+                              Supported: Dental X-Rays, Scans, JPG, PNG, WEBP, PDF documents, DICOM (Max 25 MB)
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            onClick={() => fileInputRef.current?.click()}
+                            className="mt-2 h-8 px-4 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg text-xs shadow-xs"
+                          >
+                            <Upload className="h-3.5 w-3.5 mr-1.5" />
+                            Choose File
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 p-3 bg-white dark:bg-slate-900 rounded-lg border border-blue-200 dark:border-blue-900/60 shadow-2xs">
+                          <div className="flex items-center gap-3 text-left w-full sm:w-auto">
+                            <div className="h-10 w-10 rounded-lg bg-blue-100 dark:bg-blue-950 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0">
+                              {selectedUploadFile.type.includes("pdf") ? (
+                                <FileText className="h-5 w-5" />
+                              ) : selectedUploadFile.type.startsWith("image/") ? (
+                                <ImageIcon className="h-5 w-5" />
+                              ) : (
+                                <Upload className="h-5 w-5" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <span className="font-bold text-slate-800 dark:text-slate-100 text-xs block truncate max-w-xs sm:max-w-md">
+                                {selectedUploadFile.name}
+                              </span>
+                              <div className="flex items-center gap-2 mt-0.5 text-[10px] text-slate-400">
+                                <span>{formatBytes(selectedUploadFile.size)}</span>
+                                <span>•</span>
+                                <span className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-slate-600 dark:text-slate-300">
+                                  {selectedUploadFile.type || "binary"}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                            <Button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              variant="outline"
+                              className="h-7 text-[11px] px-2.5 rounded-md border-slate-300 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800"
+                            >
+                              Change File
+                            </Button>
+                            <Button
+                              type="button"
+                              onClick={() => {
+                                setSelectedUploadFile(null);
+                                setNewFileName("");
+                                if (fileInputRef.current) fileInputRef.current.value = "";
+                              }}
+                              variant="ghost"
+                              className="h-7 w-7 p-0 text-slate-400 hover:text-red-500 rounded-md"
+                              title="Remove selected file"
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
                           </div>
                         </div>
-                        <div className="flex items-center gap-3">
-                          <button onClick={() => showToast(`Downloading file: ${file.name}`, "success")} className="text-[10px] text-blue-650 hover:underline font-bold cursor-pointer">Download</button>
-                          <button
-                            onClick={async () => {
-                              const updatedFiles = patientItem.files.filter((_, i) => i !== idx);
-                              const { error: fileErr } = await supabase
-                                .from("patients")
-                                .update({ files: updatedFiles })
-                                .eq("patient_id", selectedPatientId);
+                      )}
+                    </div>
 
-                              if (fileErr) {
-                                showToast("Failed to delete file from database.", "error");
-                                return;
-                              }
+                    {/* Form Controls: Display Name, Category, Upload Button */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+                      <div>
+                        <Label className="text-slate-700 dark:text-slate-300 font-medium">Display Name (Optional)</Label>
+                        <Input
+                          value={newFileName}
+                          onChange={(e) => setNewFileName(e.target.value)}
+                          placeholder="e.g. Full Mouth OPG Scan"
+                          className="h-9 text-xs mt-1"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-slate-700 dark:text-slate-300 font-medium">File Type Category</Label>
+                        <select
+                          className="flex h-9 w-full rounded-md border border-slate-200 bg-white px-3 py-1 text-xs focus:outline-none dark:border-slate-800 dark:bg-slate-900 text-slate-800 dark:text-slate-200 mt-1"
+                          value={newFileType}
+                          onChange={(e) => setNewFileType(e.target.value)}
+                        >
+                          <option value="X-Ray Scan">X-Ray Scan (OPG / IOPA)</option>
+                          <option value="Intraoral Photo">Intraoral Photo</option>
+                          <option value="Prescription PDF">Prescription PDF</option>
+                          <option value="Clinical PDF">Clinical Report</option>
+                          <option value="Billing Statement">Billing Statement</option>
+                          <option value="Lab Report">Lab Work / Scan</option>
+                          <option value="Consent Document">Consent Document</option>
+                          <option value="Other">Other Document</option>
+                        </select>
+                      </div>
+                      <div className="flex items-end">
+                        <Button
+                          type="submit"
+                          disabled={!selectedUploadFile || isUploadingFile}
+                          className="h-9 w-full bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white font-semibold rounded-lg flex items-center justify-center gap-2 shadow-xs cursor-pointer disabled:cursor-not-allowed"
+                        >
+                          {isUploadingFile ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <span>Uploading Scan...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Upload className="h-4 w-4" />
+                              <span>Upload Scan</span>
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </form>
+                </div>
 
-                              setPatients(prev => prev.map(p => p.id === selectedPatientId ? { ...p, files: updatedFiles } : p));
-                              showToast("File deleted successfully.", "success");
-                            }}
-                            className="text-[10px] text-red-500 hover:underline font-bold cursor-pointer"
+                {/* Uploaded Files Table List */}
+                <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm text-slate-900 dark:text-white">Patient Files & Scans</span>
+                      <span className="text-[11px] font-semibold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 px-2 py-0.5 rounded-full">
+                        {patientItem.files?.length || 0}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-slate-400">
+                      Private & Encrypted Storage
+                    </span>
+                  </div>
+
+                  {patientItem.files && patientItem.files.length > 0 ? (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-850">
+                      {patientItem.files.map((file, idx) => {
+                        const isPdf = (file.type || "").toLowerCase().includes("pdf") || (file.name || "").toLowerCase().endsWith(".pdf");
+                        const isImage = (file.type || "").toLowerCase().startsWith("image/") || /\.(jpg|jpeg|png|webp|gif|svg)$/i.test(file.name || "");
+                        const categoryColor =
+                          file.category === "X-Ray Scan"
+                            ? "bg-blue-100 text-blue-700 dark:bg-blue-950/80 dark:text-blue-300"
+                            : file.category === "Intraoral Photo"
+                            ? "bg-purple-100 text-purple-700 dark:bg-purple-950/80 dark:text-purple-300"
+                            : file.category === "Prescription PDF"
+                            ? "bg-amber-100 text-amber-700 dark:bg-amber-950/80 dark:text-amber-300"
+                            : file.category === "Clinical PDF" || file.category === "Clinical Report"
+                            ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300"
+                            : "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300";
+
+                        return (
+                          <div
+                            key={file.id || idx}
+                            className="py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50/60 dark:hover:bg-slate-900/40 px-3 rounded-lg transition-colors"
                           >
-                            Delete
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div
+                                className={`h-10 w-10 rounded-lg flex items-center justify-center shrink-0 ${
+                                  isPdf
+                                    ? "bg-red-50 text-red-600 dark:bg-red-950/60 dark:text-red-400"
+                                    : isImage
+                                    ? "bg-blue-50 text-blue-600 dark:bg-blue-950/60 dark:text-blue-400"
+                                    : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                                }`}
+                              >
+                                {isPdf ? (
+                                  <FileText className="h-5 w-5" />
+                                ) : isImage ? (
+                                  <ImageIcon className="h-5 w-5" />
+                                ) : (
+                                  <FileText className="h-5 w-5" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <span className="font-bold text-xs text-slate-900 dark:text-slate-100 block truncate max-w-xs sm:max-w-md">
+                                  {file.name}
+                                </span>
+                                <div className="flex flex-wrap items-center gap-2 mt-0.5 text-[11px] text-slate-400">
+                                  <span className={`px-2 py-0.5 rounded text-[10px] font-semibold ${categoryColor}`}>
+                                    {file.category || file.type || "Scan"}
+                                  </span>
+                                  <span>{file.size || "Unknown size"}</span>
+                                  {file.created_at && (
+                                    <>
+                                      <span>•</span>
+                                      <span>
+                                        {new Date(file.created_at).toLocaleDateString("en-IN", {
+                                          day: "2-digit",
+                                          month: "short",
+                                          year: "numeric",
+                                          hour: "2-digit",
+                                          minute: "2-digit"
+                                        })}
+                                      </span>
+                                    </>
+                                  )}
+                                  {file.uploaded_by && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="text-slate-500 dark:text-slate-400">by {file.uploaded_by}</span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Actions: Preview, Download, Delete */}
+                            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                              {(isPdf || isImage) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handlePreviewFile(file)}
+                                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold transition-colors cursor-pointer"
+                                  title="View file preview"
+                                >
+                                  <Eye className="h-3.5 w-3.5 text-blue-500" />
+                                  <span>Preview</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadFile(file)}
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 text-[11px] font-semibold transition-colors cursor-pointer"
+                                title="Download file securely"
+                              >
+                                <Download className="h-3.5 w-3.5 text-emerald-500" />
+                                <span>Download</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setFileToDelete({ file, index: idx })}
+                                className="flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-red-200 dark:border-red-900/40 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 text-[11px] font-semibold transition-colors cursor-pointer"
+                                title="Delete file"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                                <span>Delete</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="py-12 text-center flex flex-col items-center justify-center space-y-2">
+                      <div className="h-12 w-12 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center">
+                        <FileText className="h-6 w-6" />
+                      </div>
+                      <p className="font-semibold text-slate-700 dark:text-slate-300 text-xs">No attachments uploaded</p>
+                      <p className="text-[11px] text-slate-400 max-w-sm">
+                        Upload dental scans, X-rays, clinical photos, or PDF documents above to securely store them with this patient's profile.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* File Preview Modal */}
+                {filePreviewModal?.open && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn"
+                    onClick={() => setFilePreviewModal(null)}
+                  >
+                    <div
+                      className="bg-white dark:bg-slate-900 rounded-2xl max-w-4xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden border border-slate-200 dark:border-slate-800"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Modal Header */}
+                      <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50 dark:bg-slate-950">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          {filePreviewModal.type === "application/pdf" ? (
+                            <FileText className="h-5 w-5 text-red-500 shrink-0" />
+                          ) : (
+                            <ImageIcon className="h-5 w-5 text-blue-500 shrink-0" />
+                          )}
+                          <div className="min-w-0">
+                            <span className="font-bold text-xs text-slate-900 dark:text-white block truncate max-w-md">
+                              {filePreviewModal.name}
+                            </span>
+                            {filePreviewModal.category && (
+                              <span className="text-[10px] text-slate-400 block">{filePreviewModal.category}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <a
+                            href={filePreviewModal.url}
+                            download={filePreviewModal.name}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold shadow-xs"
+                          >
+                            <Download className="h-3.5 w-3.5" />
+                            <span>Download</span>
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() => setFilePreviewModal(null)}
+                            className="h-8 w-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                          >
+                            <X className="h-4 w-4" />
                           </button>
                         </div>
                       </div>
-                    ))
-                  ) : (
-                    <p className="text-slate-400 py-2 text-center">No attachments uploaded.</p>
-                  )}
-                </div>
+
+                      {/* Modal Content */}
+                      <div className="flex-1 overflow-auto bg-slate-900/5 dark:bg-slate-950/60 flex items-center justify-center min-h-[400px]">
+                        {filePreviewModal.type === "application/pdf" ? (
+                          <iframe
+                            src={filePreviewModal.url}
+                            className="w-full h-[72vh] border-0"
+                            title={filePreviewModal.name}
+                          />
+                        ) : (
+                          <div className="p-4 max-h-[72vh] flex items-center justify-center">
+                            <img
+                              src={filePreviewModal.url}
+                              alt={filePreviewModal.name}
+                              className="max-h-[68vh] max-w-full object-contain rounded-lg shadow-lg border border-slate-200 dark:border-slate-800 bg-black/20"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Delete Confirmation Modal */}
+                {fileToDelete && (
+                  <div
+                    className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn"
+                    onClick={() => !isDeletingFile && setFileToDelete(null)}
+                  >
+                    <div
+                      className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="h-10 w-10 rounded-full bg-red-100 dark:bg-red-950/80 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
+                          <AlertTriangle className="h-5 w-5" />
+                        </div>
+                        <div>
+                          <span className="font-bold text-sm text-slate-900 dark:text-white block">Delete Patient File?</span>
+                          <span className="text-[11px] text-slate-400">Permanent removal from storage</span>
+                        </div>
+                      </div>
+
+                      <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                        Are you sure you want to permanently delete{" "}
+                        <span className="font-bold text-slate-900 dark:text-white">"{fileToDelete.file.name}"</span>?
+                        This will remove the file from secure storage and clinical patient records. This action cannot be undone.
+                      </p>
+
+                      <div className="flex items-center justify-end gap-2.5 pt-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={isDeletingFile}
+                          onClick={() => setFileToDelete(null)}
+                          className="h-9 px-4 text-xs font-semibold rounded-lg"
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type="button"
+                          disabled={isDeletingFile}
+                          onClick={confirmDeleteFile}
+                          className="h-9 px-4 text-xs font-semibold bg-red-600 hover:bg-red-500 text-white rounded-lg flex items-center gap-1.5 shadow-xs"
+                        >
+                          {isDeletingFile ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              <span>Deleting...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Trash2 className="h-3.5 w-3.5" />
+                              <span>Delete Permanently</span>
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -10719,7 +12814,7 @@ ${clinicName}`;
 
                         <div>
                           <Label>Link Appointment Date (Optional)</Label>
-                          <Input value={editMediaAppointment} onChange={e => setEditMediaAppointment(e.target.value)} placeholder="e.g. 12 Aug 2026" />
+                          <Input value={editMediaAppointment} onChange={e => setEditMediaAppointment(e.target.value)} placeholder={`e.g. ${dynamicTodayUiDate}`} />
                         </div>
 
                         <div>
@@ -10820,9 +12915,23 @@ ${clinicName}`;
                         }`}>{pat.status}</span>
                       </td>
                       <td className="py-3.5 px-3 text-center whitespace-nowrap">
-                        <button onClick={() => setSelectedPatientId(pat.id)} className="text-blue-605 hover:underline text-[14px] sm:text-[15px] font-semibold cursor-pointer">
-                          Open Profile
-                        </button>
+                        <div className="flex items-center justify-center gap-2.5">
+                          <button onClick={() => setSelectedPatientId(pat.id)} className="text-blue-605 hover:underline text-[14px] sm:text-[15px] font-semibold cursor-pointer">
+                            Open Profile
+                          </button>
+                          {isOwner && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setPatientToDelete(pat);
+                              }}
+                              className="text-rose-500 hover:text-rose-700 hover:underline text-[13px] font-medium cursor-pointer"
+                              title={`Delete patient ${pat.name}`}
+                            >
+                              Delete
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -10930,7 +13039,7 @@ ${clinicName}`;
     const pat = patients.find(p => p.name === tr.patient || p.id === tr.patient);
     const patName = tr.patient || "Patient";
     const patId = pat?.id || "DS-1001";
-    const cost = tr.cost || 0;
+    const cost = tr.cost || (tr.name.includes("Implant") ? 35000 : tr.name.includes("Crown") ? 12000 : tr.name.includes("Orthodontic") ? 45000 : tr.name.includes("Scaling") ? 2500 : tr.name.includes("Extraction") ? 3500 : 8500);
     const paid = tr.stage === "Completed" ? cost : Math.round(cost * 0.6);
     const remaining = cost - paid;
     const invId = `INV-${tr.id.replace(/\D/g, '') || '1001'}`;
@@ -11113,8 +13222,8 @@ ${clinicName}`;
                     setApptDoctor(tr.doctor);
                   }
                   setApptTreatment(tr.name);
-                  setApptDate(new Date().toISOString().split("T")[0]);
-                  setApptTime("10:00 AM");
+                  setApptDate(dynamicTodayUiDate);
+                  setApptTime(getNextAvailableAppointmentSlot());
                   setActiveModal("addAppointment");
                 }}
                 className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs h-11 rounded-xl flex items-center justify-center gap-2 shadow-xs cursor-pointer"
@@ -11148,7 +13257,11 @@ ${clinicName}`;
                 <div className="pt-3 space-y-2.5">
                   <div className="flex justify-between items-center text-[12px]">
                     <span className="font-medium text-slate-400 dark:text-slate-500">Last Payment</span>
-                    <span className="text-[14px] font-medium text-slate-700 dark:text-slate-300">₹2,500 on 12 Aug 2026 (Cash)</span>
+                    <span className="text-[14px] font-medium text-slate-700 dark:text-slate-300">
+                      {paid > 0
+                        ? `₹${paid.toLocaleString()} on ${tr.date || dynamicTodayUiDate}`
+                        : "No payments recorded yet"}
+                    </span>
                   </div>
                   <div className="flex justify-between items-center text-[12px]">
                     <span className="font-medium text-slate-400 dark:text-slate-500">Payment Status</span>
@@ -11184,7 +13297,7 @@ ${clinicName}`;
                     total: cost,
                     paidAmount: paid,
                     status: remaining === 0 ? "Paid" : "Partially Paid",
-                    paymentDate: "12 Aug 2026",
+                    paymentDate: dynamicTodayUiDate,
                     paymentLogs: []
                   };
                   setSelectedInvoiceForPayment(inv);
@@ -11228,7 +13341,7 @@ ${clinicName}`;
                   const total = visits.length;
                   const completed = visits.filter(v => v.isCompleted).length;
                   const planName = tr.treatmentPlan || tr.name;
-                  const costVal = tr.cost !== undefined && tr.cost > 0 ? tr.cost : 0;
+                  const costVal = tr.cost !== undefined && tr.cost > 0 ? tr.cost : (planName.includes("Implant") ? 35000 : planName.includes("Crown") ? 12000 : planName.includes("Orthodontic") ? 45000 : planName.includes("Scaling") ? 2500 : planName.includes("Extraction") ? 3500 : 8500);
                   const isCompleted = tr.stage === "Completed" || (total > 0 && completed === total);
 
                   return (
@@ -11270,8 +13383,33 @@ ${clinicName}`;
   const renderBillingModule = () => (
     <div className="space-y-6 animate-fadeIn">
       {activeSubTab === "Invoices" && (
-        <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs overflow-x-auto scrollbar-thin">
-          <table className="w-full min-w-[760px] text-left border-collapse text-xs font-semibold">
+        <div className="space-y-4">
+          {/* Header Action Bar */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Receipt className="h-5 w-5 text-[#00529b] dark:text-blue-400" />
+                Clinic Billing & Invoices
+              </h3>
+              <p className="text-xs text-slate-500">
+                Manage patient invoices, track payments, and generate official 32 Smiles stationery printouts
+              </p>
+            </div>
+            <Button
+              type="button"
+              onClick={() => {
+                resetMultiTreatmentForm();
+                setGlobalInvoicePatientId(selectedPatientId || (patients[0]?.id || ""));
+                setIsGlobalCreateInvoiceModalOpen(true);
+              }}
+              className="h-10 px-4 bg-[#00529b] hover:bg-[#00417c] text-white font-bold rounded-xl flex items-center gap-2 shadow-xs cursor-pointer self-start sm:self-auto"
+            >
+              <Plus className="h-4 w-4" /> Create New Invoice
+            </Button>
+          </div>
+
+          <div className="bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs overflow-x-auto scrollbar-thin">
+            <table className="w-full min-w-[760px] text-left border-collapse text-xs font-semibold">
             <thead>
               <tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] text-slate-400 uppercase tracking-wider">
                 <th className="py-3 px-3 whitespace-nowrap min-w-[130px]">Invoice Number</th>
@@ -11343,6 +13481,7 @@ ${clinicName}`;
             </tbody>
           </table>
         </div>
+      </div>
       )}
 
       {activeSubTab === "Payments" && (
@@ -11363,12 +13502,391 @@ ${clinicName}`;
           </div>
         </div>
       )}
+      {/* GLOBAL CREATE INVOICE MODAL (FOR ANY PATIENT FROM BILLING MODULE) */}
+      {isGlobalCreateInvoiceModalOpen && (() => {
+        const modalPat = patients.find(p => p.id === globalInvoicePatientId);
+        const { subtotal, discountAmount, totalPayable, paid, balanceDue } = calculateInvoiceFormValues();
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-3 sm:p-5 overflow-y-auto">
+            <div className="bg-white dark:bg-slate-950 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[95vh] flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800 animate-fadeIn">
+              {/* Modal Header */}
+              <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 shrink-0">
+                <div className="flex items-center gap-2.5">
+                  <span className="h-9 w-9 rounded-xl bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center text-[#00529b] dark:text-blue-400">
+                    <Receipt className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <h3 className="font-bold text-base text-slate-900 dark:text-white">
+                      Create Multi-Treatment Invoice
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Generate official tax invoice for any registered patient
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsGlobalCreateInvoiceModalOpen(false)}
+                  className="h-8 w-8 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-800 dark:hover:text-white flex items-center justify-center transition-colors cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              {/* Modal Body */}
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 text-xs scrollbar-thin">
+                {/* Patient Selector */}
+                <div className="bg-slate-50 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 space-y-2">
+                  <Label className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Select Patient <span className="text-rose-500">*</span>
+                  </Label>
+                  <select
+                    className="flex h-9 w-full rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    value={globalInvoicePatientId}
+                    onChange={(e) => setGlobalInvoicePatientId(e.target.value)}
+                  >
+                    <option value="">-- Choose Patient --</option>
+                    {patients.map(p => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} (ID: {p.id}) {p.phone ? `• ${p.phone}` : ""}
+                      </option>
+                    ))}
+                  </select>
+
+                  {modalPat && (
+                    <div className="pt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-slate-600 dark:text-slate-400 border-t border-slate-200 dark:border-slate-800 mt-2">
+                      <div>Name: <strong className="text-slate-900 dark:text-white">{modalPat.name}</strong></div>
+                      <div>ID: <strong className="text-slate-900 dark:text-white">{modalPat.id}</strong></div>
+                      <div>Age / Gender: <strong className="text-slate-900 dark:text-white">{modalPat.age ? `${modalPat.age} Y` : "-"} / {modalPat.gender || "-"}</strong></div>
+                      <div>Phone: <strong className="text-slate-900 dark:text-white">{modalPat.phone || "-"}</strong></div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Form Elements */}
+                <form
+                  onSubmit={(e) => handleSaveMultiTreatmentInvoice(e, globalInvoicePatientId)}
+                  className="space-y-5"
+                >
+                  {/* Top Bar: Invoice ID & Date */}
+                  <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                        Invoice ID (Editable)
+                      </label>
+                      <input
+                        type="text"
+                        value={invoiceCustomId || getNextInvoiceId()}
+                        onChange={(e) => setInvoiceCustomId(e.target.value)}
+                        placeholder="e.g. INV-1001"
+                        className="h-8 px-2.5 w-36 font-bold text-xs text-[#00529b] dark:text-blue-400 bg-white dark:bg-slate-900 rounded-lg border border-slate-300 dark:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                        Invoice Date
+                      </span>
+                      <span className="font-semibold text-xs text-slate-800 dark:text-slate-200 leading-8">
+                        {getTodayKolkataUiDate()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Multi-Treatment Rows Table */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                        Treatments / Procedures
+                      </span>
+                      <span className="text-[11px] text-slate-400">
+                        {invoiceTreatmentRows.length} treatment lines
+                      </span>
+                    </div>
+
+                    <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-2xs">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-slate-100/80 dark:bg-slate-900/80 text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold uppercase tracking-wider">
+                            <th className="py-2.5 px-3 text-center w-12">#</th>
+                            <th className="py-2.5 px-3">Treatment / Procedure Details</th>
+                            <th className="py-2.5 px-3 text-center w-24">Qty</th>
+                            <th className="py-2.5 px-3 text-right w-36">Unit Price (₹)</th>
+                            <th className="py-2.5 px-3 text-right w-36">Line Total (₹)</th>
+                            <th className="py-2.5 px-3 text-center w-14">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-950">
+                          {invoiceTreatmentRows.map((row, idx) => {
+                            const lineTotal = (Number(row.quantity) || 1) * (Number(row.unitPrice) || 0);
+
+                            return (
+                              <tr key={row.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/20">
+                                <td className="py-2.5 px-3 text-center font-bold text-slate-500 text-xs">
+                                  {idx + 1}
+                                </td>
+                                <td className="py-2.5 px-3">
+                                  <div className="space-y-1.5">
+                                    <select
+                                      className="h-8 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-xs font-medium text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                      value={row.description}
+                                      onChange={(e) => handleUpdateTreatmentRow(row.id, "description", e.target.value)}
+                                    >
+                                      <option value="">-- Select from Treatment Catalogue --</option>
+                                      {TREATMENT_CATEGORIES.map((cat) => (
+                                        <optgroup key={cat.id} label={cat.displayName || cat.name}>
+                                          <option value={cat.name}>{cat.name}</option>
+                                          {cat.subTreatments?.map((sub) => (
+                                            <option key={sub} value={`${cat.name} - ${sub}`}>
+                                              &nbsp;&nbsp;↳ {sub}
+                                            </option>
+                                          ))}
+                                        </optgroup>
+                                      ))}
+                                    </select>
+                                    <input
+                                      type="text"
+                                      placeholder="Or specify custom description / tooth number..."
+                                      value={row.description}
+                                      onChange={(e) => handleUpdateTreatmentRow(row.id, "description", e.target.value)}
+                                      className="h-7 w-full rounded border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 px-2 text-[11px] text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                    />
+                                  </div>
+                                </td>
+                                <td className="py-2.5 px-3 text-center align-top pt-3">
+                                  <input
+                                    type="number"
+                                    min="1"
+                                    value={row.quantity}
+                                    onChange={(e) => handleUpdateTreatmentRow(row.id, "quantity", e.target.value)}
+                                    className="h-8 w-16 text-center rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 mx-auto block"
+                                  />
+                                </td>
+                                <td className="py-2.5 px-3 text-right align-top pt-3">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="any"
+                                    placeholder="0.00"
+                                    value={row.unitPrice}
+                                    onChange={(e) => handleUpdateTreatmentRow(row.id, "unitPrice", e.target.value)}
+                                    className="h-8 w-28 text-right rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500 ml-auto block"
+                                  />
+                                </td>
+                                <td className="py-2.5 px-3 text-right align-top pt-4 font-bold text-xs text-slate-900 dark:text-white">
+                                  ₹{lineTotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                                <td className="py-2.5 px-3 text-center align-top pt-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveTreatmentRow(row.id)}
+                                    className="h-8 w-8 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center justify-center transition-colors mx-auto cursor-pointer"
+                                    title="Remove treatment row"
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div className="flex justify-between items-center pt-1">
+                      <button
+                        type="button"
+                        onClick={handleAddTreatmentRow}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/40 hover:bg-blue-100 rounded-xl border border-blue-200 dark:border-blue-900 transition-colors cursor-pointer"
+                      >
+                        <Plus className="h-4 w-4" /> Add Treatment
+                      </button>
+
+                      <span className="text-[11px] text-slate-500">
+                        Subtotal: <strong className="text-slate-800 dark:text-slate-200">₹{subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Payment Details & Calculation */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                    <div className="space-y-3 bg-slate-50/70 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                      <span className="font-bold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 block">
+                        Payment Mode & Doctor
+                      </span>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <Label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Doctor</Label>
+                          <select
+                            className="mt-1 flex h-8 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900"
+                            value={invoiceDoctor}
+                            onChange={(e) => setInvoiceDoctor(e.target.value)}
+                          >
+                            {doctors.length > 0 ? (
+                              doctors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)
+                            ) : (
+                              <option value="Dr. Deepa Kodali">Dr. Deepa Kodali</option>
+                            )}
+                          </select>
+                        </div>
+
+                        <div>
+                          <Label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Payment Mode</Label>
+                          <select
+                            className="mt-1 flex h-8 w-full rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900"
+                            value={invoicePaymentMode}
+                            onChange={(e) => setInvoicePaymentMode(e.target.value)}
+                          >
+                            <option value="Cash">Cash</option>
+                            <option value="UPI GPay">UPI / GPay</option>
+                            <option value="Card Swipe">Card</option>
+                            <option value="Bank Transfer">Net Banking</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between items-center mb-1">
+                          <Label className="text-[11px] font-bold text-slate-600 dark:text-slate-400">Paid Amount (₹)</Label>
+                          <div className="flex gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setInvoicePaidAmount(String(totalPayable))}
+                              className="text-[10px] font-bold text-blue-600 dark:text-blue-400 hover:underline px-1 cursor-pointer"
+                            >
+                              Full (₹{totalPayable.toLocaleString()})
+                            </button>
+                            <span className="text-slate-300">•</span>
+                            <button
+                              type="button"
+                              onClick={() => setInvoicePaidAmount("0")}
+                              className="text-[10px] font-bold text-slate-500 hover:underline px-1 cursor-pointer"
+                            >
+                              Zero (₹0)
+                            </button>
+                          </div>
+                        </div>
+                        <input
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={invoicePaidAmount}
+                          onChange={(e) => setInvoicePaidAmount(e.target.value)}
+                          className="h-9 w-full rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-3 text-xs font-bold text-emerald-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                          placeholder="0.00"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2.5 bg-slate-50/70 dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800">
+                      <span className="font-bold text-xs uppercase tracking-wider text-slate-700 dark:text-slate-300 block">
+                        Summary
+                      </span>
+
+                      <div className="flex justify-between items-center text-slate-600 dark:text-slate-400">
+                        <span className="font-semibold">Subtotal:</span>
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          ₹{subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-semibold text-slate-600 dark:text-slate-400">Discount:</span>
+                          <div className="inline-flex rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 p-0.5 text-[10px]">
+                            <button
+                              type="button"
+                              onClick={() => setInvoiceDiscountType("percentage")}
+                              className={`px-1.5 py-0.5 rounded font-bold cursor-pointer transition-colors ${
+                                invoiceDiscountType === "percentage" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-800"
+                              }`}
+                            >
+                              %
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setInvoiceDiscountType("fixed")}
+                              className={`px-1.5 py-0.5 rounded font-bold cursor-pointer transition-colors ${
+                                invoiceDiscountType === "fixed" ? "bg-blue-600 text-white" : "text-slate-500 hover:text-slate-800"
+                              }`}
+                            >
+                              ₹ Fixed
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={invoiceDiscountValue}
+                            onChange={(e) => setInvoiceDiscountValue(e.target.value)}
+                            className="h-7 w-20 text-right rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-2 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="0"
+                          />
+                          {discountAmount > 0 && (
+                            <span className="text-rose-600 font-bold text-xs">
+                              -₹{discountAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="pt-2 border-t-2 border-slate-300 dark:border-slate-700 flex justify-between items-center text-sm font-extrabold text-[#00529b] dark:text-blue-400">
+                        <span>Total Payable:</span>
+                        <span className="text-base font-black">
+                          ₹{totalPayable.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between items-center text-xs font-bold text-emerald-600">
+                        <span>Amount Paid:</span>
+                        <span>₹{paid.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                      </div>
+
+                      <div className="pt-1.5 border-t border-slate-200 dark:border-slate-800 flex justify-between items-center text-xs font-bold">
+                        <span className="text-slate-700 dark:text-slate-300">Balance Due:</span>
+                        <span className={balanceDue > 0 ? "text-amber-600 font-extrabold" : "text-emerald-600 font-semibold"}>
+                          {balanceDue > 0 ? `₹${balanceDue.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "✓ Paid in Full"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-3 pt-3 border-t border-slate-200 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => setIsGlobalCreateInvoiceModalOpen(false)}
+                      className="h-10 px-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 text-slate-700 dark:text-slate-300 font-bold cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <Button
+                      type="submit"
+                      disabled={isSavingMultiInvoice || !globalInvoicePatientId}
+                      className="h-10 px-6 bg-[#00529b] hover:bg-[#00417c] text-white font-extrabold rounded-xl shadow-md cursor-pointer flex items-center gap-2"
+                    >
+                      <Receipt className="h-4 w-4" />
+                      {isSavingMultiInvoice ? "Saving & Generating..." : "Save & Generate Invoice"}
+                    </Button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 
   const renderReportsModule = () => {
     // Current active sub-tab inside Reports (defaults to Revenue if invalid)
-    const currentSubTab = ["Revenue", "Patients", "Treatments", "Appointments", "Medicine Stock"].includes(activeSubTab)
+    const currentSubTab = ["Revenue", "Patients", "Treatments", "Appointments"].includes(activeSubTab)
       ? activeSubTab
       : "Revenue";
 
@@ -11648,45 +14166,9 @@ ${clinicName}`;
       };
     };
 
-    // Helper calculation for Reports -> Medicine Stock Analytics
-    const getMedicineAnalyticsData = () => {
-      const { start, end } = getReportsDateRange(reportsFilter, customStartDate, customEndDate);
-      const filteredTransactions = stockTransactions.filter(t => {
-        const dStr = t.created_at || t.transaction_date || (t as any).date;
-        return isDateInRange(dStr, start, end);
-      });
-
-      let totalReceivedInPeriod = 0;
-      let totalDispensedInPeriod = 0;
-
-      filteredTransactions.forEach(t => {
-        if (t.transaction_type === "received") {
-          totalReceivedInPeriod += Math.abs(t.quantity || 0);
-        } else if (t.transaction_type === "dispensed") {
-          totalDispensedInPeriod += Math.abs(t.quantity || 0);
-        }
-      });
-
-      const totalTracked = medicines.length;
-      const lowStockCount = medicines.filter(m => getMedicineStockStatus(m) === "low_stock").length;
-      const outOfStockCount = medicines.filter(m => getMedicineStockStatus(m) === "out_of_stock").length;
-      const notConfiguredCount = medicines.filter(m => getMedicineStockStatus(m) === "not_configured").length;
-
-      return {
-        totalTracked,
-        totalReceivedInPeriod,
-        totalDispensedInPeriod,
-        lowStockCount,
-        outOfStockCount,
-        notConfiguredCount,
-        filteredTransactions
-      };
-    };
-
     const patientStats = getPatientAnalyticsData();
     const trStats = getTreatmentAnalyticsData();
     const apptStats = getAppointmentAnalyticsData();
-    const medStats = getMedicineAnalyticsData();
 
     return (
       <div className="space-y-6 animate-fadeIn">
@@ -12518,187 +15000,18 @@ ${clinicName}`;
             </div>
           </div>
         )}
-
-        {/* SUB-TAB 5: MEDICINE STOCK */}
-        {currentSubTab === "Medicine Stock" && (
-          <div className="space-y-6 animate-fadeIn">
-            {/* 1. TIMEFRAME FILTER & METRIC HEADER */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl p-3.5 sm:p-4 shadow-xs">
-              <div className="flex items-center gap-2">
-                <Boxes className="h-5 w-5 text-blue-600" />
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Medicine Stock Analytics & Audit Logs</h3>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">Inventory levels, dispensing history, and stock movement logs</p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-900 p-1 rounded-xl self-start sm:self-auto overflow-x-auto">
-                {(["Today", "Week", "Month", "Custom"] as const).map((filter) => (
-                  <button
-                    key={filter}
-                    type="button"
-                    onClick={() => {
-                      if (filter === "Custom") {
-                        setCustomRangeModalOpen(true);
-                      } else {
-                        setReportsFilter(filter);
-                      }
-                    }}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer whitespace-nowrap ${
-                      reportsFilter === filter
-                        ? "bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow-xs"
-                        : "text-slate-500 hover:text-slate-900 dark:hover:text-slate-200"
-                    }`}
-                  >
-                    {filter === "Custom" && appliedCustomLabel ? appliedCustomLabel : filter === "Week" ? "This Week" : filter === "Month" ? "This Month" : filter}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* 2. METRIC SUMMARY CARDS */}
-            {(() => {
-              const medAnalytics = medStats;
-              return (
-                <>
-                  <div className="grid grid-cols-2 lg:grid-cols-5 gap-3.5 sm:gap-4">
-                    <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex flex-col justify-between">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Total Tracked</span>
-                        <div className="h-8 w-8 rounded-xl bg-blue-50 dark:bg-blue-950/50 flex items-center justify-center text-blue-600">
-                          <Pill className="h-4 w-4" />
-                        </div>
-                      </div>
-                      <div className="mt-3">
-                        <span className="text-2xl font-bold text-slate-900 dark:text-white">{medAnalytics.totalTracked}</span>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Catalogue Medicines</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex flex-col justify-between">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Stock Received</span>
-                        <div className="h-8 w-8 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 flex items-center justify-center text-emerald-600">
-                          <Package className="h-4 w-4" />
-                        </div>
-                      </div>
-                      <div className="mt-3">
-                        <span className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">+{medAnalytics.totalReceivedInPeriod}</span>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Units Added in Period</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex flex-col justify-between">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Stock Dispensed</span>
-                        <div className="h-8 w-8 rounded-xl bg-purple-50 dark:bg-purple-950/50 flex items-center justify-center text-purple-600">
-                          <Pill className="h-4 w-4" />
-                        </div>
-                      </div>
-                      <div className="mt-3">
-                        <span className="text-2xl font-bold text-purple-600 dark:text-purple-400">-{medAnalytics.totalDispensedInPeriod}</span>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Units Dispensed in Period</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex flex-col justify-between">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Low Stock Alert</span>
-                        <div className="h-8 w-8 rounded-xl bg-amber-50 dark:bg-amber-950/50 flex items-center justify-center text-amber-600">
-                          <AlertTriangle className="h-4 w-4" />
-                        </div>
-                      </div>
-                      <div className="mt-3">
-                        <span className="text-2xl font-bold text-amber-600 dark:text-amber-400">{medAnalytics.lowStockCount}</span>
-                        <p className="text-[10px] text-slate-400 mt-0.5">Below Threshold</p>
-                      </div>
-                    </div>
-
-                    <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-xs flex flex-col justify-between col-span-2 lg:col-span-1">
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">Out of Stock</span>
-                        <div className="h-8 w-8 rounded-xl bg-rose-50 dark:bg-rose-950/50 flex items-center justify-center text-rose-600">
-                          <AlertTriangle className="h-4 w-4" />
-                        </div>
-                      </div>
-                      <div className="mt-3">
-                        <span className="text-2xl font-bold text-rose-600 dark:text-rose-400">{medAnalytics.outOfStockCount}</span>
-                        <p className="text-[10px] text-slate-400 mt-0.5">0 Units Remaining</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* 3. MEDICINE STOCK SUMMARY TABLE */}
-                  <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-                      <div>
-                        <h4 className="text-sm font-bold text-slate-900 dark:text-white">Current Stock Levels</h4>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400">Real-time catalogue stock status</p>
-                      </div>
-                    </div>
-
-                    <div className="overflow-x-auto scrollbar-thin">
-                      <table className="w-full text-left border-collapse text-xs font-semibold min-w-[650px]">
-                        <thead>
-                          <tr className="border-b border-slate-200 dark:border-slate-800 text-[11px] text-slate-400 uppercase tracking-wider">
-                            <th className="py-3 px-3">Medicine Name</th>
-                            <th className="py-3 px-3">Stock Unit</th>
-                            <th className="py-3 px-3">Available Quantity</th>
-                            <th className="py-3 px-3">Low Threshold</th>
-                            <th className="py-3 px-3">Status</th>
-                            <th className="py-3 px-3 text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                          {medicines.map((med) => (
-                            <tr key={med.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/30">
-                              <td className="py-3 px-3 font-bold text-slate-900 dark:text-white">{med.name}</td>
-                              <td className="py-3 px-3 text-slate-600 dark:text-slate-300 capitalize">{med.stock_unit}</td>
-                              <td className="py-3 px-3 font-bold">
-                                {med.available_quantity === null || med.available_quantity === undefined ? (
-                                  <span className="text-slate-400 font-normal">-- (Unset)</span>
-                                ) : (
-                                  <span className={med.available_quantity === 0 ? "text-rose-600 dark:text-rose-400" : "text-slate-900 dark:text-white"}>
-                                    {med.available_quantity} {med.stock_unit}
-                                  </span>
-                                )}
-                              </td>
-                              <td className="py-3 px-3 text-slate-500 dark:text-slate-400">{med.low_stock_threshold} {med.stock_unit}</td>
-                              <td className="py-3 px-3">{renderStockStatusBadge(getMedicineStockStatus(med))}</td>
-                              <td className="py-3 px-3 text-right">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setHistoryMedicine(med);
-                                    setHistoryModalOpen(true);
-                                  }}
-                                  className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-semibold cursor-pointer"
-                                >
-                                  Movement History
-                                </button>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </>
-              );
-            })()}
-          </div>
-        )}
       </div>
     );
   };
 
   const renderSettingsModule = () => {
     const settingsNavItems = [
-      { name: "Clinic", icon: Building2 },
-      { name: "Doctors", icon: Stethoscope },
-      { name: "Staff", icon: Users },
-      ...(isOwner ? [{ name: "Stock / Medicine", icon: Pill }] : []),
-      { name: "Backup", icon: Database },
+      { name: "Clinic", label: "Clinic", icon: Building2 },
+      { name: "Doctors", label: "Doctors", icon: Stethoscope },
+      { name: "Staff", label: "Staff", icon: Users },
+      ...(isOwner ? [{ name: "Stock / Medicine", label: "Medicine Catalogue", icon: Pill }] : []),
+      { name: "Treatments", label: "Treatments", icon: Activity },
+      { name: "Backup", label: "Backup", icon: Database },
     ];
     const settingsTabs = settingsNavItems.map(i => i.name);
     const currentTab = settingsTabs.includes(activeSubTab) ? activeSubTab : "Clinic";
@@ -12722,14 +15035,10 @@ ${clinicName}`;
       setDoctorModalOpen(true);
     };
 
-    const handleSaveClinicSettings = (e?: React.FormEvent) => {
+    const handleSaveClinicSettings = async (e?: React.FormEvent) => {
       if (e) e.preventDefault();
       if (!clinicName.trim()) {
         showToast("Please enter a clinic name.", "error");
-        return;
-      }
-      if (!receptionistUser.trim()) {
-        showToast("Please enter a receptionist user name.", "error");
         return;
       }
       if (!clinicAddress.trim()) {
@@ -12737,16 +15046,57 @@ ${clinicName}`;
         return;
       }
 
+      setIsSavingSettings(true);
+
       try {
-        const settingsObj = {
-          clinicName: clinicName.trim(),
-          receptionistUser: receptionistUser.trim(),
-          clinicAddress: clinicAddress.trim()
+        const matchedReceptionist = staffList.find(s => s.role.toLowerCase().includes("reception") || s.role.toLowerCase().includes("desk"));
+        const receptionistId = matchedReceptionist && !matchedReceptionist.id.startsWith("st-") ? matchedReceptionist.id : null;
+
+        const payload = {
+          clinic_name: clinicName.trim(),
+          address: clinicAddress.trim(),
+          receptionist_name: receptionistUser.trim() || null,
+          receptionist_user_id: receptionistId,
+          singleton_guard: true,
+          updated_at: new Date().toISOString()
         };
-        localStorage.setItem("clinic_settings", JSON.stringify(settingsObj));
-        showToast("Clinic configurations saved.", "success");
-      } catch (err) {
-        showToast("Failed to save clinic configurations.", "error");
+
+        const { data: savedRecord, error: saveErr } = await supabase
+          .from("clinic_settings")
+          .upsert(payload, { onConflict: "singleton_guard" })
+          .select()
+          .single();
+
+        if (saveErr) {
+          console.error("Failed to save clinic settings to database:", saveErr);
+          showToast(saveErr.message || "Failed to save clinic configurations.", "error");
+          setIsSavingSettings(false);
+          return;
+        }
+
+        if (savedRecord) {
+          setSettingsRecordId(savedRecord.id);
+          setClinicName(savedRecord.clinic_name || "");
+          setClinicAddress(savedRecord.address || "");
+          if (savedRecord.receptionist_name && !isReceptionistAccountIdentity) {
+            setReceptionistUser(savedRecord.receptionist_name);
+          }
+
+          try {
+            localStorage.setItem("clinic_settings", JSON.stringify({
+              clinicName: savedRecord.clinic_name || "",
+              clinicAddress: savedRecord.address || "",
+              receptionistUser: receptionistUser.trim()
+            }));
+          } catch (e) {}
+
+          showToast("Clinic configurations saved successfully.", "success");
+        }
+      } catch (err: any) {
+        console.error("Unexpected error saving clinic configurations:", err);
+        showToast(err?.message || "Failed to save clinic configurations.", "error");
+      } finally {
+        setIsSavingSettings(false);
       }
     };
 
@@ -12944,7 +15294,10 @@ ${clinicName}`;
           const staffEndpoint = `${supabaseUrl}/functions/v1/staff`;
 
           const { data: { session } } = await supabase.auth.getSession();
-          const authHeaders: Record<string, string> = { "Content-Type": "application/json" };
+          const authHeaders: Record<string, string> = {
+            "Content-Type": "application/json",
+            "apikey": process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+          };
           if (session?.access_token) {
             authHeaders["Authorization"] = `Bearer ${session.access_token}`;
           }
@@ -13005,7 +15358,9 @@ ${clinicName}`;
           const staffEndpoint = `${supabaseUrl}/functions/v1/staff?id=${encodeURIComponent(deleteStaffConfirm.id)}`;
 
           const { data: { session } } = await supabase.auth.getSession();
-          const authHeaders: Record<string, string> = {};
+          const authHeaders: Record<string, string> = {
+            "apikey": process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+          };
           if (session?.access_token) {
             authHeaders["Authorization"] = `Bearer ${session.access_token}`;
           }
@@ -13040,7 +15395,6 @@ ${clinicName}`;
       setIsBackingUp(true);
 
       try {
-        const supabase = createClient();
         const { data, error } = await supabase.functions.invoke("backup", {
           body: {},
         });
@@ -13065,7 +15419,7 @@ ${clinicName}`;
 
           {/* DESKTOP LEFT NAVIGATION COLUMN (hidden on mobile, visible md+) */}
           <div className="hidden md:block md:col-span-3 lg:col-span-3 border-r border-slate-100 dark:border-slate-800/80 p-4 space-y-1.5 bg-slate-50/30 dark:bg-slate-950/20">
-            {settingsNavItems.map(({ name, icon: Icon }) => {
+            {settingsNavItems.map(({ name, label, icon: Icon }) => {
               const isActive = currentTab === name;
               return (
                 <button
@@ -13079,7 +15433,7 @@ ${clinicName}`;
                   }`}
                 >
                   <Icon className={`h-4 w-4 shrink-0 ${isActive ? "text-blue-600 dark:text-blue-400" : "text-slate-400 dark:text-slate-500"}`} />
-                  <span>{name}</span>
+                  <span>{label || name}</span>
                 </button>
               );
             })}
@@ -13088,7 +15442,7 @@ ${clinicName}`;
           {/* MOBILE BLOCK CARDS NAVIGATION (visible on mobile, hidden md+) */}
           <div className="block md:hidden border-b border-slate-100 dark:border-slate-800/80 p-3 bg-slate-50/40 dark:bg-slate-950/30">
             <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
-              {settingsNavItems.map(({ name, icon: Icon }) => {
+              {settingsNavItems.map(({ name, label, icon: Icon }) => {
                 const isActive = currentTab === name;
                 return (
                   <button
@@ -13108,7 +15462,7 @@ ${clinicName}`;
                     }`}>
                       <Icon className="h-4 w-4" />
                     </div>
-                    <span className="text-[11px] leading-tight truncate w-full">{name}</span>
+                    <span className="text-[11px] leading-tight truncate w-full">{label || name}</span>
                   </button>
                 );
               })}
@@ -13121,7 +15475,10 @@ ${clinicName}`;
             {/* 1. CLINIC */}
             {currentTab === "Clinic" && (
               <div className="space-y-6 max-w-xl">
-                <h2 className="text-[18px] font-semibold text-slate-900 dark:text-white tracking-tight">Clinic Profile Settings</h2>
+                <div>
+                  <h2 className="text-[18px] font-semibold text-slate-900 dark:text-white tracking-tight">Clinic Profile Settings</h2>
+                  <p className="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5">Manage your clinic profile, address, and primary practice details.</p>
+                </div>
 
                 <form onSubmit={handleSaveClinicSettings} className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -13130,16 +15487,36 @@ ${clinicName}`;
                       <Input
                         value={clinicName}
                         onChange={(e) => setClinicName(e.target.value)}
+                        placeholder="e.g. 32 Smiles Dental Clinic"
                         className="h-10 rounded-xl border-slate-200 dark:border-slate-800 text-[14px]"
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <Label className="text-[13px] font-medium text-slate-700 dark:text-slate-300">Receptionist User</Label>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[13px] font-medium text-slate-700 dark:text-slate-300">Receptionist User</Label>
+                        {isReceptionistAccountIdentity && (
+                          <span className="text-[10px] uppercase font-bold tracking-wider text-blue-600 dark:text-blue-400">Account Identity</span>
+                        )}
+                      </div>
                       <Input
                         value={receptionistUser}
-                        onChange={(e) => setReceptionistUser(e.target.value)}
-                        className="h-10 rounded-xl border-slate-200 dark:border-slate-800 text-[14px]"
+                        onChange={(e) => {
+                          if (!isReceptionistAccountIdentity) {
+                            setReceptionistUser(e.target.value);
+                          }
+                        }}
+                        readOnly={isReceptionistAccountIdentity}
+                        disabled={isReceptionistAccountIdentity}
+                        placeholder={isReceptionistAccountIdentity ? "Linked to receptionist account" : "Enter receptionist name"}
+                        className={`h-10 rounded-xl border-slate-200 dark:border-slate-800 text-[14px] ${
+                          isReceptionistAccountIdentity ? "bg-slate-50/80 dark:bg-slate-900/40 text-slate-500 dark:text-slate-400 cursor-not-allowed" : ""
+                        }`}
                       />
+                      {isReceptionistAccountIdentity && (
+                        <p className="text-[11px] text-slate-400 dark:text-slate-500">
+                          Receptionist account credentials and profile details are managed in the Staff tab.
+                        </p>
+                      )}
                     </div>
                   </div>
 
@@ -13148,6 +15525,7 @@ ${clinicName}`;
                     <Input
                       value={clinicAddress}
                       onChange={(e) => setClinicAddress(e.target.value)}
+                      placeholder="e.g. 12, Main Road, Bengaluru"
                       className="h-10 rounded-xl border-slate-200 dark:border-slate-800 text-[14px]"
                     />
                   </div>
@@ -13155,9 +15533,16 @@ ${clinicName}`;
                   <div className="pt-2">
                     <Button
                       type="submit"
-                      className="bg-blue-600 hover:bg-blue-500 text-white font-bold h-10 px-5 rounded-xl text-xs cursor-pointer shadow-xs"
+                      disabled={isSavingSettings}
+                      className="bg-blue-600 hover:bg-blue-500 text-white font-bold h-10 px-5 rounded-xl text-xs cursor-pointer shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      Save Settings
+                      {isSavingSettings ? (
+                        <>
+                          <Loader2 className="h-4 w-4 animate-spin mr-1.5" /> Saving...
+                        </>
+                      ) : (
+                        "Save Settings"
+                      )}
                     </Button>
                   </div>
                 </form>
@@ -13410,14 +15795,14 @@ ${clinicName}`;
               </div>
             )}
 
-            {/* 5. STOCK / MEDICINE INVENTORY (Owner Only) */}
+            {/* 5. MEDICINE CATALOGUE (Owner Only) */}
             {currentTab === "Stock / Medicine" && isOwner && (
               <div className="space-y-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
                   <div>
-                    <h2 className="text-[18px] font-semibold text-slate-900 dark:text-white tracking-tight">Medicine Stock Management</h2>
+                    <h2 className="text-[18px] font-semibold text-slate-900 dark:text-white tracking-tight">Medicine Catalogue</h2>
                     <p className="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5">
-                      Configure stock units, thresholds, incoming inventory shipments and adjustments.
+                      Clinical medicine catalogue available for patient prescriptions.
                     </p>
                   </div>
                   <Button
@@ -13432,20 +15817,20 @@ ${clinicName}`;
                 {/* Filters & Search */}
                 <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
                   <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-800 text-xs font-semibold overflow-x-auto scrollbar-none">
-                    {(["All", "In Stock", "Low Stock", "Not Configured"] as const).map(st => {
-                      const isActive = stockStatusFilter === st;
+                    {(["All", ...MEDICINE_CATEGORIES] as const).map(cat => {
+                      const isActive = (stockCategoryFilter === cat) || (cat === "All" && !stockCategoryFilter);
                       return (
                         <button
-                          key={st}
+                          key={cat}
                           type="button"
-                          onClick={() => setStockStatusFilter(st)}
+                          onClick={() => setStockCategoryFilter(cat === "All" ? "" : cat)}
                           className={`px-3 py-1.5 rounded-lg whitespace-nowrap transition-colors cursor-pointer ${
                             isActive
                               ? "bg-white dark:bg-slate-800 text-blue-600 dark:text-blue-400 shadow-xs"
                               : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
                           }`}
                         >
-                          {st}
+                          {cat}
                         </button>
                       );
                     })}
@@ -13462,15 +15847,14 @@ ${clinicName}`;
                   </div>
                 </div>
 
-                {/* Inventory Table */}
+                {/* Catalogue Table */}
                 <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto scrollbar-thin">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-50 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold">
                       <tr>
                         <th className="py-3 px-4">Medicine Name</th>
-                        <th className="py-3 px-4">Stock Unit</th>
-                        <th className="py-3 px-4">Available Qty</th>
-                        <th className="py-3 px-4">Low-Stock Threshold</th>
+                        <th className="py-3 px-4">Category</th>
+                        <th className="py-3 px-4">Dosage Form / Unit</th>
                         <th className="py-3 px-4">Status</th>
                         <th className="py-3 px-4 text-right">Actions</th>
                       </tr>
@@ -13478,19 +15862,21 @@ ${clinicName}`;
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800/80 font-medium text-slate-800 dark:text-slate-200">
                       {(() => {
                         const filtered = medicines.filter(m => {
-                          const matchesSearch = m.name.toLowerCase().includes(stockSearchQuery.toLowerCase());
-                          const status = getMedicineStockStatus(m);
+                          const query = stockSearchQuery.toLowerCase();
+                          const matchesSearch = m.name.toLowerCase().includes(query) ||
+                            (m.category && m.category.toLowerCase().includes(query));
                           if (!matchesSearch) return false;
-                          if (stockStatusFilter === "In Stock") return status === "in_stock";
-                          if (stockStatusFilter === "Low Stock") return status === "low_stock";
-                          if (stockStatusFilter === "Not Configured") return status === "not_configured";
+                          if (stockCategoryFilter) {
+                            const cat = m.category || getCategoryForMedicine(m.name);
+                            if (cat !== stockCategoryFilter) return false;
+                          }
                           return true;
                         });
 
                         if (filtered.length === 0) {
                           return (
                             <tr>
-                              <td colSpan={6} className="py-8 text-center text-slate-400">
+                              <td colSpan={5} className="py-8 text-center text-slate-400">
                                 No medicines found matching criteria.
                               </td>
                             </tr>
@@ -13498,52 +15884,41 @@ ${clinicName}`;
                         }
 
                         return filtered.map(m => {
-                          const status = getMedicineStockStatus(m);
+                          const cat = m.category || getCategoryForMedicine(m.name);
+                          const form = m.dosage_form || m.stock_unit;
                           return (
                             <tr key={m.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/40">
                               <td className="py-3 px-4 font-bold text-slate-900 dark:text-white">
                                 {m.name}
-                                {!m.is_active && <span className="ml-2 text-[10px] text-red-500 font-normal">(Inactive)</span>}
                               </td>
-                              <td className="py-3 px-4 capitalize">{m.stock_unit}</td>
-                              <td className="py-3 px-4 font-mono font-bold">
-                                {m.available_quantity !== null && m.available_quantity !== undefined ? `${m.available_quantity} ${m.stock_unit}` : <span className="text-slate-400 font-normal">--</span>}
+                              <td className="py-3 px-4">
+                                <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-blue-50 text-blue-700 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                                  {cat}
+                                </span>
                               </td>
-                              <td className="py-3 px-4 font-mono">{m.low_stock_threshold} {m.stock_unit}</td>
-                              <td className="py-3 px-4">{renderStockStatusBadge(status)}</td>
+                              <td className="py-3 px-4 capitalize text-slate-600 dark:text-slate-300">
+                                {form}
+                              </td>
+                              <td className="py-3 px-4">
+                                {m.is_active ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                                    Active
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-bold bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400 border border-slate-200 dark:border-slate-700">
+                                    Inactive
+                                  </span>
+                                )}
+                              </td>
                               <td className="py-3 px-4 text-right">
                                 <div className="flex items-center justify-end gap-1.5">
                                   <button
                                     type="button"
-                                    onClick={() => handleOpenAddStock(m)}
-                                    className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg transition-colors cursor-pointer"
-                                    title="Add Stock"
-                                  >
-                                    <Plus className="h-4 w-4" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenAdjustStock(m)}
-                                    className="p-1.5 text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-lg transition-colors cursor-pointer"
-                                    title="Stock Adjustment"
-                                  >
-                                    <SlidersHorizontal className="h-4 w-4" />
-                                  </button>
-                                  <button
-                                    type="button"
                                     onClick={() => handleOpenEditMedicine(m)}
-                                    className="p-1.5 text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
+                                    className="p-1.5 text-slate-600 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg transition-colors cursor-pointer"
                                     title="Edit Medicine Details"
                                   >
                                     <Pencil className="h-4 w-4" />
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenMedicineHistory(m)}
-                                    className="p-1.5 text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
-                                    title="View Stock History"
-                                  >
-                                    <Clock className="h-4 w-4" />
                                   </button>
                                 </div>
                               </td>
@@ -13554,6 +15929,234 @@ ${clinicName}`;
                     </tbody>
                   </table>
                 </div>
+              </div>
+            )}
+
+            {/* 6. TREATMENTS CATALOGUE */}
+            {currentTab === "Treatments" && (
+              <div className="space-y-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-4">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-[18px] font-semibold text-slate-900 dark:text-white tracking-tight">Treatment Catalogue</h2>
+                      {!isOwner && (
+                        <span className="px-2.5 py-0.5 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-full font-semibold text-[11px] border border-slate-200 dark:border-slate-700">
+                          Read-Only View
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[13px] text-slate-500 dark:text-slate-400 mt-0.5">
+                      Configure dental treatment categories, sub-treatments, and chart color indicators.
+                    </p>
+                  </div>
+                  {isOwner && (
+                    <Button
+                      type="button"
+                      onClick={handleOpenAddCategory}
+                      className="bg-blue-600 hover:bg-blue-500 text-white font-bold h-9 px-4 rounded-xl text-xs flex items-center gap-1.5 shrink-0 cursor-pointer shadow-xs"
+                    >
+                      <Plus className="h-4 w-4" /> Add Category
+                    </Button>
+                  )}
+                </div>
+
+                {/* Filters, Search & Summary */}
+                {(() => {
+                  const filteredCats = treatmentCategories.filter(cat => {
+                    if (cat.isActive === false) return false;
+                    if (!treatmentsSearchQuery.trim()) return true;
+                    const q = treatmentsSearchQuery.toLowerCase();
+                    const matchCat = cat.name.toLowerCase().includes(q) || cat.displayName.toLowerCase().includes(q);
+                    const matchSub = cat.subTreatments?.some(s => s.toLowerCase().includes(q));
+                    return matchCat || matchSub;
+                  });
+
+                  const totalProcedures = filteredCats.reduce((acc, c) => acc + (c.subTreatments?.length || 0), 0);
+                  const allExpanded = filteredCats.length > 0 && filteredCats.every(c => expandedCategories[c.id]);
+
+                  return (
+                    <>
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <div className="relative max-w-xs w-full sm:w-72">
+                            <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                            <Input
+                              placeholder="Search categories or sub-treatments..."
+                              value={treatmentsSearchQuery}
+                              onChange={e => setTreatmentsSearchQuery(e.target.value)}
+                              className="pl-9 h-9 text-xs rounded-xl"
+                            />
+                          </div>
+                          {treatmentsSearchQuery && (
+                            <button
+                              type="button"
+                              onClick={() => setTreatmentsSearchQuery("")}
+                              className="text-xs text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 px-2 py-1 rounded cursor-pointer"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-2 self-end sm:self-auto">
+                          <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200/80 dark:border-slate-700/60">
+                            {filteredCats.length} Categories
+                          </span>
+                          <span className="text-[11px] font-semibold text-slate-500 dark:text-slate-400 px-2.5 py-1 bg-slate-100 dark:bg-slate-800 rounded-lg border border-slate-200/80 dark:border-slate-700/60">
+                            {totalProcedures} Sub-Treatments
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next: Record<string, boolean> = {};
+                              filteredCats.forEach(c => { next[c.id] = !allExpanded; });
+                              setExpandedCategories(prev => ({ ...prev, ...next }));
+                            }}
+                            className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline px-2 py-1 cursor-pointer"
+                          >
+                            {allExpanded ? "Collapse All" : "Expand All"}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Categories List (Accordion Cards) */}
+                      <div className="space-y-3">
+                        {filteredCats.length === 0 ? (
+                          <div className="p-8 text-center bg-slate-50 dark:bg-slate-900/40 rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 text-xs">
+                            No treatment categories or sub-treatments found matching &quot;{treatmentsSearchQuery}&quot;.
+                          </div>
+                        ) : (
+                          filteredCats.map(cat => {
+                            const isExpanded = !!expandedCategories[cat.id] || !!treatmentsSearchQuery.trim();
+                            const subCount = cat.subTreatments?.length || 0;
+                            const pal = getColorPaletteByKey(cat.colorKey);
+                            const dotClass = cat.colorDot || pal.dotColor;
+
+                            return (
+                              <div
+                                key={cat.id}
+                                className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden shadow-2xs transition-all"
+                              >
+                                <div
+                                  onClick={() => toggleCategoryExpand(cat.id)}
+                                  className="flex items-center justify-between p-3.5 sm:p-4 cursor-pointer hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors select-none"
+                                >
+                                  <div className="flex items-center gap-3 min-w-0">
+                                    <span className={`w-3.5 h-3.5 rounded-full shrink-0 ${dotClass}`} />
+                                    <div className="min-w-0">
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className="font-bold text-[14px] text-slate-900 dark:text-white truncate">
+                                          {cat.displayName}
+                                        </span>
+                                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border border-slate-200 dark:border-slate-700/60">
+                                          {subCount > 0 ? `${subCount} sub-treatment${subCount > 1 ? "s" : ""}` : "Direct procedure"}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-1.5 shrink-0" onClick={e => e.stopPropagation()}>
+                                    {isOwner && (
+                                      <>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenAddSubTreatment(cat.id)}
+                                          className="hidden sm:inline-flex items-center gap-1 text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-950/40 px-2.5 py-1 rounded-lg border border-blue-200 dark:border-blue-900/60 transition-colors cursor-pointer"
+                                          title={`Add sub-treatment to ${cat.name}`}
+                                        >
+                                          <Plus className="h-3 w-3" /> Sub-treatment
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => handleOpenEditCategory(cat)}
+                                          className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded-lg transition-colors cursor-pointer"
+                                          title="Edit category name and color"
+                                        >
+                                          <Pencil className="h-3.5 w-3.5" />
+                                        </button>
+                                        <button
+                                          type="button"
+                                          onClick={() => setDeleteTreatmentConfirm({ type: "category", category: cat })}
+                                          className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-lg transition-colors cursor-pointer"
+                                          title="Delete category"
+                                        >
+                                          <Trash2 className="h-3.5 w-3.5" />
+                                        </button>
+                                      </>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleCategoryExpand(cat.id)}
+                                      className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg transition-colors cursor-pointer"
+                                      title={isExpanded ? "Collapse" : "Expand"}
+                                    >
+                                      {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {isExpanded && (
+                                  <div className="border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/40 p-3.5 sm:p-4 space-y-3">
+                                    {cat.subTreatments && cat.subTreatments.length > 0 ? (
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                        {cat.subTreatments.map((sub, sIdx) => (
+                                          <div
+                                            key={`${cat.id}-${sub}-${sIdx}`}
+                                            className="flex items-center justify-between p-2.5 bg-white dark:bg-slate-900 rounded-lg border border-slate-200/80 dark:border-slate-800 text-xs shadow-2xs hover:border-slate-300 dark:hover:border-slate-700 transition-colors"
+                                          >
+                                            <div className="flex items-center gap-2 min-w-0 pr-2">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-slate-400 dark:bg-slate-500 shrink-0" />
+                                              <span className="font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                                {sub}
+                                              </span>
+                                            </div>
+                                            {isOwner && (
+                                              <div className="flex items-center gap-1 shrink-0">
+                                                <button
+                                                  type="button"
+                                                  onClick={() => handleOpenEditSubTreatment(cat.id, sub)}
+                                                  className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/40 rounded transition-colors cursor-pointer"
+                                                  title="Edit sub-treatment name"
+                                                >
+                                                  <Pencil className="h-3 w-3" />
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() => setDeleteTreatmentConfirm({ type: "subTreatment", category: cat, subName: sub })}
+                                                  className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded transition-colors cursor-pointer"
+                                                  title="Delete sub-treatment"
+                                                >
+                                                  <Trash2 className="h-3 w-3" />
+                                                </button>
+                                              </div>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    ) : (
+                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 bg-white dark:bg-slate-900 rounded-lg border border-dashed border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
+                                        <span>This category acts as a direct procedure in the Dental Chart. You can add specific procedure variations if needed.</span>
+                                        {isOwner && (
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenAddSubTreatment(cat.id)}
+                                            className="inline-flex items-center gap-1 font-bold text-blue-600 dark:text-blue-400 hover:underline shrink-0 cursor-pointer"
+                                          >
+                                            <Plus className="h-3 w-3" /> Add first sub-treatment
+                                          </button>
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
 
@@ -13832,6 +16435,207 @@ ${clinicName}`;
                 </Button>
                 <Button type="button" onClick={handleDeleteStaff} className="bg-red-600 hover:bg-red-500 text-white font-bold h-10 px-5 text-xs">
                   Remove Staff
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* --- TREATMENT CATEGORY ADD/EDIT MODAL --- */}
+        {categoryModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+            <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl w-full max-w-md p-6 space-y-5 animate-scaleIn">
+              <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
+                <h3 className="text-[16px] font-bold text-slate-900 dark:text-white">
+                  {editingCategory ? "Edit Treatment Category" : "Add Treatment Category"}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setCategoryModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveCategory} className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[13px] font-medium">Category Name</Label>
+                  <Input
+                    required
+                    placeholder="e.g. Periodontics, Bleaching, Veneers"
+                    value={catFormName}
+                    onChange={(e) => setCatFormName(e.target.value)}
+                    className="h-10 text-[13px]"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[13px] font-medium">Chart Color Indicator</Label>
+                    <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                      {getColorPaletteByKey(catFormColorKey).label}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 sm:grid-cols-8 gap-2 p-2.5 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                    {TREATMENT_COLOR_PALETTES.map((pal) => {
+                      const isSelected = catFormColorKey.toLowerCase() === pal.key.toLowerCase();
+                      return (
+                        <button
+                          key={pal.key}
+                          type="button"
+                          onClick={() => setCatFormColorKey(pal.key)}
+                          className={`h-8 w-8 rounded-lg flex items-center justify-center transition-all cursor-pointer ${
+                            isSelected
+                              ? "ring-2 ring-blue-600 ring-offset-2 dark:ring-offset-slate-900 scale-110 shadow-sm"
+                              : "opacity-80 hover:opacity-100 hover:scale-105"
+                          }`}
+                          style={{ backgroundColor: pal.hex }}
+                          title={pal.label}
+                        >
+                          {isSelected && <Check className="h-4 w-4 text-white drop-shadow-xs" />}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setCategoryModalOpen(false)}
+                    className="h-10 px-4 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-bold h-10 px-5 text-xs cursor-pointer shadow-xs"
+                  >
+                    {editingCategory ? "Save Category" : "Add Category"}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* --- SUB-TREATMENT ADD/EDIT MODAL --- */}
+        {subTreatmentModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+            <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl w-full max-w-md p-6 space-y-5 animate-scaleIn">
+              <div className="flex justify-between items-center border-b border-slate-100 dark:border-slate-800 pb-3">
+                <h3 className="text-[16px] font-bold text-slate-900 dark:text-white">
+                  {editingSubTreatment ? "Edit Sub-Treatment" : "Add Sub-Treatment"}
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setSubTreatmentModalOpen(false)}
+                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveSubTreatment} className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label className="text-[13px] font-medium">Category</Label>
+                  <select
+                    value={subFormCatId}
+                    onChange={(e) => setSubFormCatId(e.target.value)}
+                    disabled={!!editingSubTreatment}
+                    className="w-full h-10 px-3 text-[13px] rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-slate-900 dark:text-white disabled:opacity-60 cursor-pointer"
+                  >
+                    {treatmentCategories.filter(c => c.isActive !== false).map(c => (
+                      <option key={c.id} value={c.id}>{c.displayName}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-[13px] font-medium">Sub-Treatment Name</Label>
+                  <Input
+                    required
+                    placeholder="e.g. Deep Scaling, Ceramic Crown, Clear Aligners"
+                    value={subFormName}
+                    onChange={(e) => setSubFormName(e.target.value)}
+                    className="h-10 text-[13px]"
+                  />
+                </div>
+
+                <div className="flex justify-end gap-3 pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setSubTreatmentModalOpen(false)}
+                    className="h-10 px-4 text-xs font-semibold cursor-pointer"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    className="bg-blue-600 hover:bg-blue-500 text-white font-bold h-10 px-5 text-xs cursor-pointer shadow-xs"
+                  >
+                    {editingSubTreatment ? "Save Changes" : "Add Sub-Treatment"}
+                  </Button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* --- TREATMENT DELETE CONFIRMATION MODAL --- */}
+        {deleteTreatmentConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4">
+            <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl w-full max-w-md p-6 space-y-4 animate-scaleIn">
+              <div className="flex items-start gap-3">
+                <div className="h-10 w-10 rounded-full bg-red-100 dark:bg-red-955/50 text-red-600 flex items-center justify-center shrink-0">
+                  <Trash2 className="h-5 w-5" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-[16px] font-bold text-slate-900 dark:text-white">
+                    {deleteTreatmentConfirm.type === "category" ? "Delete Treatment Category?" : "Delete Sub-Treatment?"}
+                  </h3>
+                  <div className="text-[13px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    {deleteTreatmentConfirm.type === "category" ? (
+                      <>
+                        Are you sure you want to delete category <strong className="text-slate-900 dark:text-white">{deleteTreatmentConfirm.category.name}</strong>?
+                        {deleteTreatmentConfirm.category.subTreatments && deleteTreatmentConfirm.category.subTreatments.length > 0 && (
+                          <div className="mt-2.5 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-955/30 border border-amber-200 dark:border-amber-900/40 text-amber-800 dark:text-amber-300 text-xs">
+                            <strong>Impact:</strong> Contains <strong>{deleteTreatmentConfirm.category.subTreatments.length} sub-treatments</strong> ({deleteTreatmentConfirm.category.subTreatments.join(", ")}). Removing this category will remove it and all child sub-treatments from future Dental Chart selections.
+                          </div>
+                        )}
+                        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          *Historical patient clinical records and dental logs will remain safely preserved and will not be altered.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        Are you sure you want to delete sub-treatment <strong className="text-slate-900 dark:text-white">{deleteTreatmentConfirm.subName}</strong> from <strong className="text-slate-900 dark:text-white">{deleteTreatmentConfirm.category.name}</strong>?
+                        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                          This will remove it from future Dental Chart options. Existing patient history remains safe and intact.
+                        </p>
+                      </>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setDeleteTreatmentConfirm(null)}
+                  className="h-10 px-4 text-xs font-semibold cursor-pointer"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  onClick={handleConfirmDeleteTreatment}
+                  className="bg-red-600 hover:bg-red-500 text-white font-bold h-10 px-5 text-xs cursor-pointer shadow-xs"
+                >
+                  {deleteTreatmentConfirm.type === "category" ? "Delete Category" : "Delete Sub-Treatment"}
                 </Button>
               </div>
             </div>
@@ -14167,7 +16971,7 @@ ${clinicName}`;
                   {(clinicName || "Clinic").split(" ").filter(Boolean).map(w => w[0]).slice(0, 2).join("").toUpperCase() || "DC"}
                 </div>
                 <div className="flex flex-col min-w-0">
-                  <span className="text-[14px] font-bold text-slate-900 dark:text-slate-202 truncate">{clinicName}</span>
+                  <span className="text-[14px] font-bold text-slate-900 dark:text-slate-202 truncate">{clinicName || "Dental Clinic"}</span>
                   <span className="text-[12px] font-medium text-slate-505 truncate">
                     {currentUserName || (isOwner ? "Owner / Dentist" : "Receptionist")} ({isOwner ? "Owner" : "Receptionist"})
                   </span>
@@ -14556,7 +17360,7 @@ ${clinicName}`;
           >
             {hoveredItem === "profile" ? (
               <div className="flex flex-col gap-0.5 text-xs font-semibold">
-                <span className="font-bold text-[13px] text-white">{clinicName}</span>
+                <span className="font-bold text-[13px] text-white">{clinicName || "Dental Clinic"}</span>
                 <span className="text-slate-300 font-normal">{currentUserName || (isOwner ? "Owner / Dentist" : "Receptionist")}</span>
                 <span className="text-[10px] text-blue-405 font-bold uppercase tracking-wider mt-1 block">{isOwner ? "Owner" : "Receptionist"}</span>
               </div>
@@ -14706,7 +17510,7 @@ ${clinicName}`;
                       <div className="space-y-1.5">
                         <Label htmlFor="apptTreatment">Treatment Category</Label>
                         <select id="apptTreatment" className="flex h-10 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-808 focus:outline-none dark:bg-slate-955 dark:border-slate-800" value={apptTreatment} onChange={e => setApptTreatment(e.target.value)}>
-                          {COMMON_TREATMENTS.map(t => (
+                          {ALL_TREATMENTS.map(t => (
                             <option key={t} value={t}>{t}</option>
                           ))}
                         </select>
@@ -14879,226 +17683,132 @@ ${clinicName}`;
         </div>
       )}
 
-      {/* Receipt Modal (Design printer-friendly print logs) */}
-      {lastGeneratedReceipt && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-955/50 backdrop-blur-xs p-3 sm:p-6 overflow-hidden">
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="w-full max-w-2xl max-h-[calc(100dvh-24px)] sm:max-h-[calc(100vh-48px)] flex flex-col bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-xl overflow-hidden text-xs my-auto"
-          >
-            {/* Header - Not printed */}
-            <div className="flex items-center justify-between px-4 sm:px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 shrink-0 no-print bg-white dark:bg-slate-950">
-              <span className="font-bold text-sm text-slate-900 dark:text-white">Professional Dental Invoice Preview</span>
-              <button onClick={() => setLastGeneratedReceipt(null)} className="text-slate-400 hover:text-slate-650 dark:hover:text-slate-200 cursor-pointer p-1">
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            {/* Printable Content Section */}
-            <div id="print-area" className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-4 bg-white text-slate-900 border-x border-slate-300 print:overflow-visible print:p-0 print:border-none scrollbar-thin">
-
-              {/* Clinic details header (Centered) */}
-              <div className="text-center space-y-1 pb-2">
-                <h1 className="text-xl font-extrabold text-blue-900 tracking-tight">
-                  32 Smiles Multispeciality Dental Clinic
-                </h1>
-                <p className="text-[11px] text-slate-700 font-medium max-w-md mx-auto leading-tight">
-                  32 Smiles Dental Clinic, Main Road
-                </p>
-                <p className="text-[11px] font-bold text-slate-800">
-                  PH: +91 98765 43210
-                </p>
-              </div>
-              <hr className="border-slate-400 my-2" />
-
-              {/* Invoice Header Information & Patient Info */}
-              {(() => {
-                const patientObj = patients.find(p => p.id === lastGeneratedReceipt.patientId || p.name === lastGeneratedReceipt.patientName);
-                const ageGenderStr = patientObj ? `${patientObj.age} ${patientObj.gender}` : "";
-                const rawDate = lastGeneratedReceipt.paymentDate || new Date().toISOString().split("T")[0];
-                const formattedDate = rawDate.includes("T") ? rawDate.split("T")[0] : rawDate.split(" ")[0];
-
-                return (
-                  <>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 print:grid-cols-2 gap-3 sm:gap-6 print:gap-6 text-xs font-semibold py-1 text-slate-900">
-                      {/* Left column */}
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-baseline gap-x-2">
-                          <span className="w-24 sm:w-28 print:w-28 shrink-0 font-bold text-slate-900">Invoice No :</span>
-                          <span className="font-semibold text-slate-800">{lastGeneratedReceipt.id}</span>
-                        </div>
-                        <div className="flex flex-wrap items-baseline gap-x-2">
-                          <span className="w-24 sm:w-28 print:w-28 shrink-0 font-bold text-slate-900">Date :</span>
-                          <span className="font-semibold text-slate-800">{formattedDate}</span>
-                        </div>
-                      </div>
-
-                      {/* Right column */}
-                      <div className="space-y-1">
-                        <div className="flex flex-wrap items-baseline gap-x-2">
-                          <span className="w-24 sm:w-28 print:w-28 shrink-0 font-bold text-slate-900">Patient Name :</span>
-                          <span className="font-semibold text-slate-800">{lastGeneratedReceipt.patientName}</span>
-                        </div>
-                        {ageGenderStr ? (
-                          <div className="flex flex-wrap items-baseline gap-x-2">
-                            <span className="w-24 sm:w-28 print:w-28 shrink-0 font-bold text-slate-900">Age/Gender :</span>
-                            <span className="font-semibold text-slate-800">{ageGenderStr}</span>
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                    <hr className="border-slate-400 my-2" />
-                  </>
-                );
-              })()}
-
-              {/* Treatment Details Table */}
-              <div className="min-h-[140px] pt-1 overflow-x-auto print:overflow-visible scrollbar-thin">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="border-b-2 border-slate-400 text-slate-900">
-                      <th className="py-2 px-2 font-bold w-14">Sl No.</th>
-                      <th className="py-2 px-2 font-bold">Treatment Details</th>
-                      <th className="py-2 px-2 font-bold text-right w-32">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200">
-                    {lastGeneratedReceipt.items && lastGeneratedReceipt.items.length > 0 ? (
-                      lastGeneratedReceipt.items.map((item, idx) => (
-                        <tr key={idx} className="text-slate-800">
-                          <td className="py-2.5 px-2 font-bold">{idx + 1}</td>
-                          <td className="py-2.5 px-2 font-medium break-words">{item.description}</td>
-                          <td className="py-2.5 px-2 text-right font-bold font-mono">
-                            {item.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr className="text-slate-800">
-                        <td className="py-2.5 px-2 font-bold">1</td>
-                        <td className="py-2.5 px-2 font-medium break-words">{lastGeneratedReceipt.treatment || "Dental Treatment"}</td>
-                        <td className="py-2.5 px-2 text-right font-bold font-mono">
-                          {lastGeneratedReceipt.subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-              <hr className="border-slate-400 my-3" />
-
-              {/* Financial Summary (Right Aligned) */}
-              <div className="flex justify-end my-3">
-                <div className="w-full sm:w-64 print:w-64 space-y-1.5 text-xs font-bold text-slate-900">
-                  <div className="flex justify-between">
-                    <span>Gross amount :</span>
-                    <span className="font-mono">
-                      {lastGeneratedReceipt.subtotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
+      {/* Official 32 Smiles Multispeciality Dental Clinic Letterhead Tax Invoice Preview & Print Modal */}
+      {lastGeneratedReceipt && (() => {
+        const patientObj = patients.find(p => p.id === lastGeneratedReceipt.patientId || p.name === lastGeneratedReceipt.patientName) || null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 backdrop-blur-xs p-2 sm:p-4 overflow-y-auto print:hidden">
+            <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl max-w-4xl w-full max-h-[96vh] flex flex-col overflow-hidden border border-slate-200 dark:border-slate-800 animate-fadeIn">
+              {/* Modal Header Bar (Screen Only) */}
+              <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center bg-slate-50 dark:bg-slate-950 shrink-0 no-print">
+                <div className="flex items-center gap-2.5">
+                  <div className="h-9 w-9 rounded-xl bg-blue-100 dark:bg-blue-900/50 flex items-center justify-center text-[#00529b] dark:text-blue-400">
+                    <Receipt className="h-5 w-5" />
                   </div>
-                  <div className="flex justify-between">
-                    <span>Amount paid :</span>
-                    <span className="font-mono">
-                      {lastGeneratedReceipt.paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                  <div className="flex justify-between border-t border-slate-300 pt-1">
-                    <span>Balance :</span>
-                    <span className="font-mono">
-                      {(lastGeneratedReceipt.total - lastGeneratedReceipt.paidAmount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </span>
+                  <div>
+                    <h3 className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-2">
+                      Official Invoice Preview
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Invoice No: <strong className="text-[#00529b] dark:text-blue-400">{lastGeneratedReceipt.id}</strong> • Patient: <strong className="text-slate-800 dark:text-slate-200">{lastGeneratedReceipt.patientName}</strong>
+                    </p>
                   </div>
                 </div>
-              </div>
 
-              {/* Payment Details Section Box */}
-              <div className="border border-slate-400 rounded-none p-0 my-3 overflow-hidden">
-                <div className="bg-slate-100 px-3 py-1.5 border-b border-slate-400 font-bold text-xs text-slate-900">
-                  Payment Details
-                </div>
-                <div className="overflow-x-auto print:overflow-visible scrollbar-thin">
-                  <table className="w-full min-w-[500px] sm:min-w-full print:min-w-full text-center border-collapse text-[11px]">
-                    <thead>
-                      <tr className="border-b border-slate-300 bg-slate-50 text-slate-800 font-bold">
-                        <th className="py-1.5 px-2 border-r border-slate-300">Receipt No</th>
-                        <th className="py-1.5 px-2 border-r border-slate-300">Amt Received</th>
-                        <th className="py-1.5 px-2 border-r border-slate-300">Amt.Refund</th>
-                        <th className="py-1.5 px-2 border-r border-slate-300">Mode</th>
-                        <th className="py-1.5 px-2 border-r border-slate-300">Date</th>
-                        <th className="py-1.5 px-2 border-r border-slate-300">NO</th>
-                        <th className="py-1.5 px-2">Bank Name</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {lastGeneratedReceipt.paymentLogs && lastGeneratedReceipt.paymentLogs.length > 0 ? (
-                        lastGeneratedReceipt.paymentLogs.map((log, idx) => (
-                          <tr key={idx} className="border-b border-slate-200 text-slate-800 font-medium">
-                            <td className="py-1.5 px-2 border-r border-slate-300 font-mono">10{idx + 1}</td>
-                            <td className="py-1.5 px-2 border-r border-slate-300 font-mono font-bold">
-                              {log.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </td>
-                            <td className="py-1.5 px-2 border-r border-slate-300 font-mono">0.00</td>
-                            <td className="py-1.5 px-2 border-r border-slate-300">{log.method}</td>
-                            <td className="py-1.5 px-2 border-r border-slate-300">{log.date || lastGeneratedReceipt.paymentDate}</td>
-                            <td className="py-1.5 px-2 border-r border-slate-300">-</td>
-                            <td className="py-1.5 px-2">-</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr className="text-slate-800 font-medium">
-                          <td className="py-1.5 px-2 border-r border-slate-300 font-mono">101</td>
-                          <td className="py-1.5 px-2 border-r border-slate-300 font-mono font-bold">
-                            {lastGeneratedReceipt.paidAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </td>
-                          <td className="py-1.5 px-2 border-r border-slate-300 font-mono">0.00</td>
-                          <td className="py-1.5 px-2 border-r border-slate-300">Cash</td>
-                          <td className="py-1.5 px-2 border-r border-slate-300">{lastGeneratedReceipt.paymentDate}</td>
-                          <td className="py-1.5 px-2 border-r border-slate-300">-</td>
-                          <td className="py-1.5 px-2">-</td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    onClick={() => generateAndDownloadInvoicePdf({ patient: patientObj, invoice: lastGeneratedReceipt })}
+                    className="h-8 px-3 rounded-lg text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Download className="h-3.5 w-3.5" /> Download PDF
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => handlePrintInvoice(lastGeneratedReceipt)}
+                    className="h-8 px-3 rounded-lg text-xs bg-[#00529b] hover:bg-[#00417c] text-white font-bold flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Printer className="h-3.5 w-3.5" /> Print Invoice
+                  </Button>
+                  <button
+                    type="button"
+                    onClick={() => setLastGeneratedReceipt(null)}
+                    className="h-8 w-8 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-500 hover:text-slate-800 dark:hover:text-white flex items-center justify-center transition-colors cursor-pointer ml-1"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
                 </div>
               </div>
 
-              {/* Dynamic Amount in Words & Signatory Block */}
-              <div className="flex flex-col sm:flex-row print:flex-row justify-between items-start sm:items-end print:items-end gap-4 sm:gap-0 pt-4 my-2 text-xs">
-                <div className="font-extrabold text-slate-900 uppercase tracking-wide max-w-full sm:max-w-xs print:max-w-xs break-words">
-                  {numberToWords(lastGeneratedReceipt.paidAmount || lastGeneratedReceipt.total)}
-                </div>
-
-                <div className="text-left sm:text-right print:text-right space-y-1 text-slate-900 shrink-0 self-end sm:self-auto">
-                  <div className="font-bold">Authorised Signatory</div>
-                  <div className="text-[11px] font-semibold text-slate-800">32 Smiles Multispeciality Dental Clinic</div>
-                  <div className="text-[10px] font-bold tracking-wider uppercase text-slate-900">PROSTHODONTIST</div>
-                </div>
+              {/* Responsive Zoomable Letterhead Stationery View (Screen) */}
+              <div className="flex-1 overflow-y-auto p-2 sm:p-6 bg-slate-200/80 dark:bg-slate-950/80 flex justify-center shadow-inner no-print">
+                <ResponsivePdfPreview
+                  pageCount={1}
+                  pageHeightPx={1123}
+                  title="Official Invoice"
+                >
+                  <VRDentalInvoicePrintTemplate
+                    patient={patientObj}
+                    invoice={lastGeneratedReceipt}
+                  />
+                </ResponsivePdfPreview>
               </div>
-
             </div>
+          </div>
+        );
+      })()}
 
-            {/* Action buttons footer - Not printed */}
-            <div className="p-4 sm:p-5 bg-slate-50 dark:bg-slate-900/60 border-t border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-2.5 shrink-0 no-print">
-              <button
-                onClick={() => {
-                  window.print();
-                }}
-                className="h-10 rounded-xl bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center gap-1.5 font-bold shadow-xs cursor-pointer"
-              >
-                <Printer className="h-4 w-4" /> Print Invoice
-              </button>
-              <button
-                onClick={() => setLastGeneratedReceipt(null)}
-                className="h-10 rounded-xl bg-white hover:bg-slate-50 border border-slate-200 dark:bg-slate-950 dark:border-slate-800 dark:hover:bg-slate-900 text-slate-800 dark:text-slate-200 flex items-center justify-center font-bold cursor-pointer"
-              >
-                Close Preview
-              </button>
-            </div>
+      {/* DEDICATED ROOT-LEVEL A4 PRINT CONTAINER (EXACT FIDELITY FOR CASE SHEET, INVOICE & PRESCRIPTION) */}
+      <div id="print-area" className="hidden print:block">
+        {(() => {
+          // 1. Invoice Print Mode
+          if (activePrintDoc === "invoice" || (!activePrintDoc && lastGeneratedReceipt)) {
+            if (!lastGeneratedReceipt) return null;
+            const patientObj = patients.find(p => p.id === lastGeneratedReceipt.patientId || p.name === lastGeneratedReceipt.patientName) || null;
+            return (
+              <VRDentalInvoicePrintTemplate
+                patient={patientObj}
+                invoice={lastGeneratedReceipt}
+              />
+            );
+          }
 
-          </motion.div>
-        </div>
-      )}
+          // 2. Prescription Print Mode
+          if (activePrintDoc === "prescription" || (!activePrintDoc && !lastGeneratedReceipt && (showPrescriptionPreviewModal || activePrintPrescription || (profileSubTab === "Prescriptions" && selectedPatientId)))) {
+            const pItem = patients.find(p => p.id === selectedPatientId);
+            if (!pItem) return null;
+            const dataToPrint = activePrintPrescription || {
+              doctorName: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+              date: prescDate,
+              diagnosis: prescDiagnosis,
+              medicines: prescMeds.filter(m => m.name.trim()),
+              advice: prescAdvice,
+            };
+            return (
+              <PrescriptionPrintTemplate
+                patient={pItem}
+                doctorName={dataToPrint.doctorName}
+                date={dataToPrint.date}
+                diagnosis={dataToPrint.diagnosis}
+                medicines={dataToPrint.medicines}
+                advice={dataToPrint.advice}
+                parseDosageFn={parseDosageString}
+              />
+            );
+          }
+
+          // 3. Case Sheet Print Mode (Default when viewing a patient profile Case Sheet)
+          if (selectedPatientId) {
+            const patientItem = patients.find(p => p.id === selectedPatientId);
+            if (!patientItem) return null;
+            return (
+              <CaseSheetPrintTemplate
+                patient={patientItem}
+                medicalHistoryConditions={editMedicalHistoryConditions}
+                medicalHistoryOthers={editMedicalHistoryOthers}
+                currentMedications={editCurrentMedications}
+                chiefComplaint={editChiefComplaint}
+                intraOralExam={editIntraOralExam}
+                provisionalDiagnosis={editProvisionalDiagnosis}
+                treatmentAdvised={formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised}
+                visitDate={patientItem.visit || patientItem.firstVisit}
+              />
+            );
+          }
+
+          return null;
+        })()}
+      </div>
       {/* RESCHEDULE APPOINTMENT MODAL DIALOG */}
       <AnimatePresence>
         {rescheduleModalAppt && (
@@ -15644,7 +18354,7 @@ ${clinicName}`;
                         value={slotTreatment}
                         onChange={e => setSlotTreatment(e.target.value)}
                       >
-                        {COMMON_TREATMENTS.map(t => (
+                        {ALL_TREATMENTS.map(t => (
                           <option key={t} value={t}>{t}</option>
                         ))}
                       </select>
@@ -15943,7 +18653,7 @@ ${clinicName}`;
                     value={editInvoicePaymentDate}
                     onChange={(e) => setEditInvoicePaymentDate(e.target.value)}
                     className="text-[13px]"
-                    placeholder="e.g. 12 Aug 2026"
+                    placeholder={`e.g. ${dynamicTodayUiDate}`}
                   />
                 </div>
               </div>
@@ -16140,7 +18850,7 @@ ${clinicName}`;
         </div>
       )}
 
-      {/* MEDICINE ADD / EDIT MODAL */}
+      {/* MEDICINE ADD / EDIT CATALOGUE MODAL */}
       {medicineModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xl max-w-md w-full space-y-5 animate-fadeIn">
@@ -16148,7 +18858,7 @@ ${clinicName}`;
               <div className="flex items-center gap-2">
                 <Pill className="h-5 w-5 text-blue-600" />
                 <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  {editingMedicine ? "Edit Medicine Catalogue Item" : "Add New Medicine to Catalogue"}
+                  {editingMedicine ? "Edit Medicine Catalogue Item" : "Add Medicine to Catalogue"}
                 </h3>
               </div>
               <button
@@ -16167,7 +18877,7 @@ ${clinicName}`;
                 </Label>
                 <Input
                   id="medFormName"
-                  placeholder="e.g. Paracetamol 500mg"
+                  placeholder="e.g. Paracetamol 650 mg"
                   value={medFormName}
                   onChange={(e) => setMedFormName(e.target.value)}
                   required
@@ -16175,73 +18885,51 @@ ${clinicName}`;
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="medFormUnit" className="text-slate-700 dark:text-slate-300">
-                  Stock Unit <span className="text-rose-500">*</span>
+                <Label htmlFor="medFormCategory" className="text-slate-700 dark:text-slate-300">
+                  Category <span className="text-rose-500">*</span>
                 </Label>
-                {editingMedicine && stockTransactions.some(t => t.medicine_id === editingMedicine.id) ? (
-                  <div>
-                    <input
-                      type="text"
-                      disabled
-                      value={medFormUnit}
-                      className="flex h-10 w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-slate-100 dark:bg-slate-900 px-3 py-2 text-sm text-slate-500 cursor-not-allowed capitalize"
-                    />
-                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 font-normal">
-                      Unit cannot be changed because stock transactions exist for this medicine.
-                    </p>
-                  </div>
-                ) : (
-                  <select
-                    id="medFormUnit"
-                    value={medFormUnit}
-                    onChange={(e) => setMedFormUnit(e.target.value)}
-                    className="flex h-10 w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 px-3 py-2 text-sm text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    required
-                  >
-                    <option value="tablets">tablets</option>
-                    <option value="capsules">capsules</option>
-                    <option value="bottles">bottles</option>
-                    <option value="tubes">tubes</option>
-                    <option value="sachets">sachets</option>
-                    <option value="vials">vials</option>
-                    <option value="strips">strips</option>
-                  </select>
-                )}
+                <select
+                  id="medFormCategory"
+                  value={medFormCategory}
+                  onChange={(e) => setMedFormCategory(e.target.value)}
+                  className="flex h-10 w-full rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-955 px-3 py-2 text-xs text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  required
+                >
+                  {MEDICINE_CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="medFormThreshold" className="text-slate-700 dark:text-slate-300">
-                  Low-Stock Threshold <span className="text-rose-500">*</span>
+                <Label htmlFor="medFormDosageForm" className="text-slate-700 dark:text-slate-300">
+                  Dosage Form / Unit <span className="text-rose-500">*</span>
                 </Label>
                 <Input
-                  id="medFormThreshold"
-                  type="number"
-                  min="1"
-                  placeholder="e.g. 5"
-                  value={medFormThreshold}
-                  onChange={(e) => setMedFormThreshold(e.target.value)}
+                  id="medFormDosageForm"
+                  placeholder="e.g. Tablet, Capsule, Syrup, Gel"
+                  value={medFormDosageForm}
+                  onChange={(e) => {
+                    setMedFormDosageForm(e.target.value);
+                    setMedFormUnit(e.target.value.toLowerCase());
+                  }}
                   required
                 />
-                <p className="text-[10px] text-slate-400 font-normal">
-                  Alert badge will show "Low Stock" when inventory drops below this number.
-                </p>
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="medFormOpeningStock" className="text-slate-700 dark:text-slate-300">
-                  Opening Stock Quantity <span className="text-slate-400 font-normal">(Optional)</span>
-                </Label>
-                <Input
-                  id="medFormOpeningStock"
-                  type="number"
-                  min="0"
-                  placeholder="Leave empty if stock count is not yet configured"
-                  value={medFormOpeningStock}
-                  onChange={(e) => setMedFormOpeningStock(e.target.value)}
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="medFormIsActive"
+                  checked={medFormIsActive}
+                  onChange={(e) => setMedFormIsActive(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 accent-blue-600 cursor-pointer"
                 />
-                <p className="text-[10px] text-slate-400 font-normal">
-                  If left empty, status remains "Not Configured" until opening stock is set.
-                </p>
+                <Label htmlFor="medFormIsActive" className="text-slate-700 dark:text-slate-300 cursor-pointer">
+                  Available in prescription dropdown
+                </Label>
               </div>
 
               <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -16261,282 +18949,6 @@ ${clinicName}`;
                 </Button>
               </div>
             </form>
-          </div>
-        </div>
-      )}
-
-      {/* ADD STOCK MODAL */}
-      {addStockModalOpen && selectedStockMedicine && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xl max-w-md w-full space-y-5 animate-fadeIn">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Package className="h-5 w-5 text-emerald-600" />
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Add Stock – {selectedStockMedicine.name}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAddStockModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-1 rounded-lg text-lg leading-none"
-              >
-                ×
-              </button>
-            </div>
-
-            <form onSubmit={handleAddStockSubmit} className="space-y-4 text-xs font-semibold">
-              <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl flex items-center justify-between border border-slate-100 dark:border-slate-800">
-                <span className="text-slate-500">Current Stock:</span>
-                <span className="font-bold text-slate-900 dark:text-white text-sm">
-                  {selectedStockMedicine.available_quantity === null ? "Not Configured" : `${selectedStockMedicine.available_quantity} ${selectedStockMedicine.stock_unit}`}
-                </span>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="addStockQty" className="text-slate-700 dark:text-slate-300">
-                  Quantity Received <span className="text-rose-500">*</span>
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="addStockQty"
-                    type="number"
-                    min="1"
-                    placeholder="e.g. 50"
-                    value={addStockQty}
-                    onChange={(e) => setAddStockQty(e.target.value)}
-                    required
-                  />
-                  <span className="text-sm font-bold text-slate-500 dark:text-slate-400 capitalize shrink-0">
-                    {selectedStockMedicine.stock_unit}
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="addStockDate" className="text-slate-700 dark:text-slate-300">
-                  Date Received
-                </Label>
-                <Input
-                  id="addStockDate"
-                  type="date"
-                  value={addStockDate}
-                  onChange={(e) => setAddStockDate(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="addStockSupplier" className="text-slate-700 dark:text-slate-300">
-                  Supplier / Vendor / Batch Ref <span className="text-slate-400 font-normal">(Optional)</span>
-                </Label>
-                <Input
-                  id="addStockSupplier"
-                  placeholder="e.g. Apex Pharma Ltd - Batch #4910"
-                  value={addStockSupplier}
-                  onChange={(e) => setAddStockSupplier(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="addStockNotes" className="text-slate-700 dark:text-slate-300">
-                  Notes / Remarks <span className="text-slate-400 font-normal">(Optional)</span>
-                </Label>
-                <Input
-                  id="addStockNotes"
-                  placeholder="Additional stock entry details..."
-                  value={addStockNotes}
-                  onChange={(e) => setAddStockNotes(e.target.value)}
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setAddStockModalOpen(false)}
-                  className="h-9 px-4 rounded font-semibold cursor-pointer"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  className="h-9 px-5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold flex items-center gap-2 cursor-pointer"
-                >
-                  Confirm & Receive Stock
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* STOCK ADJUSTMENT MODAL */}
-      {adjustStockModalOpen && adjustStockMedicine && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xl max-w-md w-full space-y-5 animate-fadeIn">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Pencil className="h-5 w-5 text-amber-600" />
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Stock Adjustment – {adjustStockMedicine.name}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAdjustStockModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-1 rounded-lg text-lg leading-none"
-              >
-                ×
-              </button>
-            </div>
-
-            <form onSubmit={handleAdjustStockSubmit} className="space-y-4 text-xs font-semibold">
-              <div className="p-3 bg-slate-50 dark:bg-slate-900 rounded-xl flex items-center justify-between border border-slate-100 dark:border-slate-800">
-                <span className="text-slate-500">Current Stock in System:</span>
-                <span className="font-bold text-slate-900 dark:text-white text-sm">
-                  {adjustStockMedicine.available_quantity === null ? "Not Configured" : `${adjustStockMedicine.available_quantity} ${adjustStockMedicine.stock_unit}`}
-                </span>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="adjustStockNewQty" className="text-slate-700 dark:text-slate-300">
-                  New Actual Count <span className="text-rose-500">*</span>
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Input
-                    id="adjustStockNewQty"
-                    type="number"
-                    min="0"
-                    placeholder="Enter physical count"
-                    value={adjustStockNewQty}
-                    onChange={(e) => setAdjustStockNewQty(e.target.value)}
-                    required
-                  />
-                  <span className="text-sm font-bold text-slate-500 dark:text-slate-400 capitalize shrink-0">
-                    {adjustStockMedicine.stock_unit}
-                  </span>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="adjustStockReason" className="text-slate-700 dark:text-slate-300">
-                  Adjustment Reason <span className="text-rose-500">*</span>
-                </Label>
-                <Input
-                  id="adjustStockReason"
-                  placeholder="e.g. Expiry, Damaged bottle, Audit correction"
-                  value={adjustStockReason}
-                  onChange={(e) => setAdjustStockReason(e.target.value)}
-                  required
-                />
-              </div>
-
-              <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => setAdjustStockModalOpen(false)}
-                  className="h-9 px-4 rounded font-semibold cursor-pointer"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  className="h-9 px-5 rounded bg-amber-600 hover:bg-amber-500 text-white font-semibold flex items-center gap-2 cursor-pointer"
-                >
-                  Save Stock Adjustment
-                </Button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* STOCK MOVEMENT HISTORY MODAL */}
-      {historyModalOpen && historyMedicine && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-xl max-w-2xl w-full space-y-5 animate-fadeIn">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div className="flex items-center gap-2">
-                <Boxes className="h-5 w-5 text-blue-600" />
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Stock Movement History – {historyMedicine.name}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setHistoryModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-1 rounded-lg text-lg leading-none"
-              >
-                ×
-              </button>
-            </div>
-
-            <div className="overflow-x-auto max-h-96 scrollbar-thin">
-              {stockTransactions.filter(t => t.medicine_id === historyMedicine.id).length === 0 ? (
-                <div className="p-8 text-center text-slate-400 font-medium text-xs">
-                  No stock movement transactions recorded yet for this medicine.
-                </div>
-              ) : (
-                <table className="w-full text-left border-collapse text-xs font-semibold">
-                  <thead>
-                    <tr className="border-b border-slate-200 dark:border-slate-800 text-[10px] text-slate-400 uppercase tracking-wider sticky top-0 bg-white dark:bg-slate-955">
-                      <th className="py-2.5 px-3">Date & Time</th>
-                      <th className="py-2.5 px-3">Type</th>
-                      <th className="py-2.5 px-3">Quantity</th>
-                      <th className="py-2.5 px-3">Stock Change</th>
-                      <th className="py-2.5 px-3">Notes / Ref</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800/60">
-                    {stockTransactions
-                      .filter(t => t.medicine_id === historyMedicine.id)
-                      .map((tx) => (
-                        <tr key={tx.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-900/30">
-                          <td className="py-2.5 px-3 text-slate-500 dark:text-slate-400 whitespace-nowrap">
-                            {new Date(tx.created_at || tx.transaction_date || (tx as any).date).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                          </td>
-                          <td className="py-2.5 px-3">
-                            <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold capitalize ${
-                              tx.transaction_type === "received" ? "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300" :
-                              tx.transaction_type === "dispensed" ? "bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300" :
-                              tx.transaction_type === "adjustment" ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" :
-                              "bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300"
-                            }`}>
-                              {tx.transaction_type.replace('_', ' ')}
-                            </span>
-                          </td>
-                          <td className="py-2.5 px-3 font-bold">
-                            {tx.transaction_type === "received" ? `+${tx.quantity}` :
-                             tx.transaction_type === "dispensed" ? `-${tx.quantity}` :
-                             tx.quantity > 0 ? `+${tx.quantity}` : `${tx.quantity}`} {historyMedicine.stock_unit}
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-500">
-                            {tx.previous_quantity !== null && tx.previous_quantity !== undefined ? tx.previous_quantity : "--"} → {tx.previous_quantity !== null && tx.previous_quantity !== undefined ? (
-                              tx.transaction_type === "received" ? tx.previous_quantity + tx.quantity :
-                              tx.transaction_type === "dispensed" ? tx.previous_quantity - tx.quantity :
-                              tx.previous_quantity + tx.quantity
-                            ) : "--"}
-                          </td>
-                          <td className="py-2.5 px-3 text-slate-600 dark:text-slate-300">
-                            {tx.notes || tx.reference || "--"}
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-
-            <div className="flex justify-end pt-3 border-t border-slate-100 dark:border-slate-800">
-              <Button
-                type="button"
-                onClick={() => setHistoryModalOpen(false)}
-                className="h-9 px-4 rounded font-semibold cursor-pointer"
-              >
-                Close
-              </Button>
-            </div>
           </div>
         </div>
       )}
@@ -16585,6 +18997,87 @@ ${clinicName}`;
                 className="h-9 px-5 rounded bg-purple-600 hover:bg-purple-500 text-white font-semibold flex items-center gap-2 cursor-pointer"
               >
                 Dispense Medicine
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE PATIENT CONFIRMATION MODAL (OWNER ONLY) */}
+      {patientToDelete && isOwner && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white dark:bg-slate-955 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-2xl max-w-md w-full space-y-5 animate-scaleUp">
+            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="h-9 w-9 rounded-full bg-rose-100 dark:bg-rose-950/60 flex items-center justify-center text-rose-600 dark:text-rose-400">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                    Delete Patient Profile
+                  </h3>
+                  <span className="text-xs text-slate-400 font-medium">Owner Authorization Required</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPatientToDelete(null)}
+                disabled={isDeletingPatient}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer p-1 rounded-lg text-lg leading-none"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-3.5 text-xs font-semibold">
+              <div className="bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-800 rounded-xl p-3.5 space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 uppercase text-[10px] font-bold">Patient Name</span>
+                  <span className="text-slate-900 dark:text-white font-bold text-sm">{patientToDelete.name}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 uppercase text-[10px] font-bold">OP Number</span>
+                  <span className="font-mono font-bold text-blue-600 dark:text-blue-400">{patientToDelete.id}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 uppercase text-[10px] font-bold">Mobile</span>
+                  <span className="text-slate-600 dark:text-slate-300 font-medium">{patientToDelete.phone}</span>
+                </div>
+              </div>
+
+              <div className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 rounded-xl text-[11px] text-rose-800 dark:text-rose-300 space-y-1 font-medium">
+                <p className="font-bold">⚠️ Warning: This action is permanent and cannot be undone.</p>
+                <p>Deleting this patient will permanently remove their medical history, clinical notes, appointments, treatments, dental charts, invoices, and associated consent documents / video recordings.</p>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t border-slate-100 dark:border-slate-800">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setPatientToDelete(null)}
+                disabled={isDeletingPatient}
+                className="h-9 px-4 rounded font-semibold cursor-pointer"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                onClick={handleConfirmDeletePatient}
+                disabled={isDeletingPatient}
+                className="h-9 px-4 rounded bg-rose-600 hover:bg-rose-500 text-white font-semibold flex items-center gap-2 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                {isDeletingPatient ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Deleting Patient...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="h-4 w-4" />
+                    <span>Permanently Delete</span>
+                  </>
+                )}
               </Button>
             </div>
           </div>
