@@ -1,5 +1,6 @@
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
+import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { loadTemplateBytes } from "./pdfTemplateLoader";
+import { wrapText, downloadPdfBytes, createPdfBlobUrl, printPdfBlob } from "./pdfUtils";
 import { numberToWords } from "@/components/print/VRDentalInvoicePrintTemplate";
 
 export interface GenerateInvoicePdfOptions {
@@ -36,18 +37,25 @@ export interface GenerateInvoicePdfOptions {
   };
 }
 
-export async function generateAndDownloadInvoicePdf(
+/**
+ * Generates the Invoice PDF bytes using strict PDF-overlay onto the original template.
+ */
+export async function generateInvoicePdfBytes(
   options: GenerateInvoicePdfOptions
-): Promise<void> {
+): Promise<Uint8Array> {
   const { patient, invoice } = options;
 
-  const doc = new jsPDF({
-    orientation: "portrait",
-    unit: "mm",
-    format: "a4",
-  });
+  const templateBytes = await loadTemplateBytes("invoice");
+  const doc = await PDFDocument.load(templateBytes);
+  const helvetica = await doc.embedFont(StandardFonts.Helvetica);
+  const helveticaBold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const textColor = rgb(0.08, 0.12, 0.2); // Crisp dark slate
 
-  const pageWidth = doc.internal.pageSize.getWidth();
+  const pages = doc.getPages();
+  const p1 = pages[0];
+  const { height: p1H } = p1.getSize();
+  const yAt = (fitzY: number) => p1H - fitzY;
+
   const patientName = invoice.patientName || patient?.name || "Patient";
   const rawDate = invoice.paymentDate || new Date().toISOString().split("T")[0];
   const formattedDate = rawDate.includes("T") ? rawDate.split("T")[0] : rawDate.split(" ")[0];
@@ -57,134 +65,205 @@ export async function generateAndDownloadInvoicePdf(
   const total = invoice.total || subtotal;
   const balance = Math.max(0, total - paidAmount);
 
-  // Clinic Header (Centered)
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.setTextColor(1, 83, 173); // #0153AD
-  doc.text("32 Smiles Multispeciality Dental Clinic", pageWidth / 2, 20, { align: "center" });
+  const ageGender = patient?.age ? `${patient.age} Y ${patient.gender ? `/ ${patient.gender}` : ""}`.trim() : "";
+  const phone = patient?.phone || "";
 
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(51, 65, 85);
-  doc.text("32 Smiles Dental Clinic, Main Road", pageWidth / 2, 26, { align: "center" });
-  doc.setFont("helvetica", "bold");
-  doc.text("PH: +91 98765 43210", pageWidth / 2, 31, { align: "center" });
+  // ==========================================
+  // INVOICE BODY (fitzY = 175 to 760)
+  // ==========================================
 
-  doc.setDrawColor(148, 163, 184);
-  doc.line(14, 35, pageWidth - 14, 35);
+  // 1. Invoice Metadata Grid (fitzY: 175 to 215)
+  // Left column: Invoice No & Date
+  p1.drawText("Invoice No :", { x: 36, y: yAt(178), size: 9, font: helveticaBold, color: textColor });
+  p1.drawText(invoice.id || "INV-001", { x: 100, y: yAt(178), size: 9, font: helvetica, color: textColor });
 
-  // Invoice Details & Patient Info Grid
-  doc.setFontSize(9);
-  doc.setTextColor(15, 23, 42);
-  doc.text(`Invoice No :  ${invoice.id}`, 16, 42);
-  doc.text(`Date :  ${formattedDate}`, 16, 48);
+  p1.drawText("Date :", { x: 36, y: yAt(196), size: 9, font: helveticaBold, color: textColor });
+  p1.drawText(formattedDate, { x: 100, y: yAt(196), size: 9, font: helvetica, color: textColor });
 
-  doc.text(`Patient Name :  ${patientName}`, pageWidth / 2 + 10, 42);
-  const ageGender = patient?.age ? `${patient.age} Y ${patient.gender || ""}`.trim() : "";
-  if (ageGender) {
-    doc.text(`Age/Gender :  ${ageGender}`, pageWidth / 2 + 10, 48);
+  // Right column: Patient Name & Age/Gender/Phone
+  p1.drawText("Patient Name :", { x: 300, y: yAt(178), size: 9, font: helveticaBold, color: textColor });
+  p1.drawText(patientName, { x: 375, y: yAt(178), size: 9, font: helvetica, color: textColor });
+
+  const extraInfo = [ageGender, phone ? `Phone: ${phone}` : ""].filter(Boolean).join("    ");
+  if (extraInfo) {
+    p1.drawText("Age / Contact :", { x: 300, y: yAt(196), size: 9, font: helveticaBold, color: textColor });
+    p1.drawText(extraInfo, { x: 375, y: yAt(196), size: 9, font: helvetica, color: textColor });
   }
 
-  doc.line(14, 53, pageWidth - 14, 53);
+  // Divider line
+  p1.drawLine({
+    start: { x: 36, y: yAt(212) },
+    end: { x: 560, y: yAt(212) },
+    thickness: 0.75,
+    color: rgb(0.8, 0.85, 0.9),
+  });
 
-  // Treatments Table
+  // 2. Treatments Table Header (fitzY: 224 to 242)
+  p1.drawRectangle({
+    x: 36,
+    y: yAt(242),
+    width: 524,
+    height: 18,
+    color: rgb(0.93, 0.96, 0.99),
+  });
+
+  p1.drawText("Sl No.", { x: 45, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
+  p1.drawText("Treatment Details", { x: 95, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
+  p1.drawText("Qty", { x: 360, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
+  p1.drawText("Unit Price (Rs.)", { x: 410, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
+  p1.drawText("Amount (Rs.)", { x: 500, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
+
+  // 3. Treatment Table Items
   const items = invoice.items && invoice.items.length > 0
     ? invoice.items
-    : [{ description: invoice.treatment || "Dental Treatment", amount: subtotal }];
+    : [{ description: invoice.treatment || "Dental Treatment", quantity: 1, unitPrice: subtotal, amount: subtotal }];
 
-  const tableRows = items.map((it, idx) => [
-    String(idx + 1),
-    it.description,
-    Number(it.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-  ]);
+  let curY = 258;
+  items.forEach((it, idx) => {
+    if (curY > 520) return; // Prevent overflowing table
 
-  autoTable(doc, {
-    startY: 57,
-    head: [["Sl No.", "Treatment Details", "Amount (₹)"]],
-    headStyles: { fillColor: [1, 83, 173], textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
-    body: tableRows,
-    bodyStyles: { fontSize: 8.5, textColor: [30, 41, 59] },
-    columnStyles: {
-      0: { cellWidth: 16, halign: "center" },
-      1: { cellWidth: "auto" },
-      2: { cellWidth: 35, halign: "right" },
-    },
-    margin: { left: 14, right: 14 },
+    const sNoStr = String(idx + 1);
+    const qtyStr = it.quantity !== undefined ? String(it.quantity) : "1";
+    const unitPrice = it.unitPrice !== undefined ? it.unitPrice : it.amount;
+    const unitPriceStr = Number(unitPrice || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const amountStr = Number(it.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+    p1.drawText(sNoStr, { x: 52, y: yAt(curY), size: 8.5, font: helvetica, color: textColor });
+    
+    // Wrap description if long
+    const descLines = wrapText(it.description || "Dental Procedure", helvetica, 8.5, 255);
+    p1.drawText(descLines[0] || "", { x: 95, y: yAt(curY), size: 8.5, font: helvetica, color: textColor });
+
+    p1.drawText(qtyStr, { x: 368, y: yAt(curY), size: 8.5, font: helvetica, color: textColor });
+
+    const upW = helvetica.widthOfTextAtSize(unitPriceStr, 8.5);
+    p1.drawText(unitPriceStr, { x: 470 - upW, y: yAt(curY), size: 8.5, font: helvetica, color: textColor });
+
+    const amW = helveticaBold.widthOfTextAtSize(amountStr, 8.5);
+    p1.drawText(amountStr, { x: 555 - amW, y: yAt(curY), size: 8.5, font: helveticaBold, color: textColor });
+
+    curY += 18;
+    p1.drawLine({
+      start: { x: 36, y: yAt(curY - 6) },
+      end: { x: 560, y: yAt(curY - 6) },
+      thickness: 0.5,
+      color: rgb(0.9, 0.92, 0.95),
+    });
   });
 
-  let currentY = (doc as any).lastAutoTable.finalY + 4;
+  // 4. Financial Summary (Right aligned, x: 340 to 560)
+  let sumY = curY + 10;
+  const grossStr = Number(subtotal).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const totalStr = Number(total).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const paidStr = Number(paidAmount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const balStr = Number(balance).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-  // Financial summary
-  const summaryX = pageWidth - 70;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(8.5);
-  doc.text("Gross amount :", summaryX, currentY);
-  doc.text(Number(subtotal).toLocaleString("en-IN", { minimumFractionDigits: 2 }), pageWidth - 16, currentY, { align: "right" });
+  const drawSummaryLine = (label: string, val: string, isBold = false, isAccent = false) => {
+    p1.drawText(label, { x: 350, y: yAt(sumY), size: 8.5, font: isBold ? helveticaBold : helvetica, color: textColor });
+    const valFont = isBold ? helveticaBold : helvetica;
+    const valColor = isAccent ? rgb(0.01, 0.45, 0.25) : textColor;
+    const vW = valFont.widthOfTextAtSize(val, 8.5);
+    p1.drawText(val, { x: 555 - vW, y: yAt(sumY), size: 8.5, font: valFont, color: valColor });
+    sumY += 14;
+  };
+
+  drawSummaryLine("Gross Amount (Rs.) :", grossStr);
 
   if (invoice.discount) {
-    currentY += 5;
-    doc.text("Discount :", summaryX, currentY);
-    doc.text(`- ${Number(invoice.discount).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`, pageWidth - 16, currentY, { align: "right" });
+    const discStr = Number(invoice.discount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    drawSummaryLine("Discount (Rs.) :", `- ${discStr}`);
   }
 
-  currentY += 5;
-  doc.text("Amount paid :", summaryX, currentY);
-  doc.text(Number(paidAmount).toLocaleString("en-IN", { minimumFractionDigits: 2 }), pageWidth - 16, currentY, { align: "right" });
-
-  currentY += 5;
-  doc.setFont("helvetica", "bold");
-  doc.text("Balance :", summaryX, currentY);
-  doc.text(Number(balance).toLocaleString("en-IN", { minimumFractionDigits: 2 }), pageWidth - 16, currentY, { align: "right" });
-
-  currentY += 8;
-
-  // Payment Details Section Box
-  const paymentRows = (invoice.paymentLogs && invoice.paymentLogs.length > 0)
-    ? invoice.paymentLogs.map((log, idx) => [
-        `10${idx + 1}`,
-        Number(log.amount).toLocaleString("en-IN", { minimumFractionDigits: 2 }),
-        "0.00",
-        log.method,
-        log.date || formattedDate,
-        "-",
-        "-"
-      ])
-    : [[
-        "101",
-        Number(paidAmount).toLocaleString("en-IN", { minimumFractionDigits: 2 }),
-        "0.00",
-        "Cash",
-        formattedDate,
-        "-",
-        "-"
-      ]];
-
-  autoTable(doc, {
-    startY: currentY,
-    head: [["Receipt No", "Amt Received", "Amt. Refund", "Mode", "Date", "NO", "Bank Name"]],
-    headStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: "bold", fontSize: 8 },
-    body: paymentRows,
-    bodyStyles: { fontSize: 8, textColor: [30, 41, 59], halign: "center" },
-    margin: { left: 14, right: 14 },
+  p1.drawLine({
+    start: { x: 350, y: yAt(sumY - 4) },
+    end: { x: 555, y: yAt(sumY - 4) },
+    thickness: 0.5,
+    color: rgb(0.8, 0.85, 0.9),
   });
 
-  currentY = (doc as any).lastAutoTable.finalY + 10;
+  drawSummaryLine("Total Amount (Rs.) :", totalStr, true);
+  drawSummaryLine("Amount Paid (Rs.) :", paidStr, true, true);
+  drawSummaryLine("Balance Due (Rs.) :", balStr, true);
 
-  // Amount in words & Signatory block
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.setTextColor(15, 23, 42);
-  const wordsText = numberToWords(paidAmount || total);
-  const splitWords = doc.splitTextToSize(wordsText, 100);
-  doc.text(splitWords, 14, currentY);
+  // 5. Payment Details Section Box
+  let payY = sumY + 8;
+  p1.drawRectangle({
+    x: 36,
+    y: yAt(payY + 14),
+    width: 524,
+    height: 14,
+    color: rgb(0.95, 0.96, 0.98),
+  });
+  p1.drawText("Payment Details", { x: 42, y: yAt(payY + 3), size: 8, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
 
-  doc.setFont("helvetica", "normal");
-  doc.text("Authorised Signatory", pageWidth - 14, currentY, { align: "right" });
-  doc.setFont("helvetica", "bold");
-  doc.text("32 Smiles Multispeciality Dental Clinic", pageWidth - 14, currentY + 4, { align: "right" });
-  doc.setFontSize(7.5);
-  doc.text("PROSTHODONTIST", pageWidth - 14, currentY + 8, { align: "right" });
+  payY += 16;
+  p1.drawText("Receipt No", { x: 45, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
+  p1.drawText("Amt Received (Rs.)", { x: 130, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
+  p1.drawText("Payment Mode", { x: 250, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
+  p1.drawText("Date", { x: 360, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
+  p1.drawText("Reference / Bank", { x: 450, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
 
-  const safeFilename = `32Smiles_Invoice_${invoice.id}_${patientName.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`;
-  doc.save(safeFilename);
+  payY += 14;
+  if (invoice.paymentLogs && invoice.paymentLogs.length > 0) {
+    invoice.paymentLogs.slice(0, 3).forEach((log, idx) => {
+      const logAmtStr = Number(log.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      p1.drawText(`REC-10${idx + 1}`, { x: 45, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+      p1.drawText(logAmtStr, { x: 130, y: yAt(payY + 4), size: 8, font: helveticaBold, color: rgb(0.01, 0.45, 0.25) });
+      p1.drawText(log.method || "Cash", { x: 250, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+      p1.drawText(log.date || formattedDate, { x: 360, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+      p1.drawText("-", { x: 450, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+      payY += 12;
+    });
+  } else {
+    p1.drawText("REC-101", { x: 45, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+    p1.drawText(paidStr, { x: 130, y: yAt(payY + 4), size: 8, font: helveticaBold, color: rgb(0.01, 0.45, 0.25) });
+    p1.drawText("Cash", { x: 250, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+    p1.drawText(formattedDate, { x: 360, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+    p1.drawText("-", { x: 450, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+  }
+
+  // 6. Dynamic Amount in Words & Authorised Signatory Block
+  const wordY = Math.max(payY + 36, 680);
+  p1.drawText("Amount in Words:", { x: 36, y: yAt(wordY), size: 8, font: helveticaBold, color: textColor });
+  const inWords = numberToWords(paidAmount || total);
+  p1.drawText(inWords, { x: 36, y: yAt(wordY + 12), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
+
+  // Signatory Block on right
+  p1.drawText("Authorised Signatory", { x: 430, y: yAt(wordY), size: 8.5, font: helveticaBold, color: textColor });
+  p1.drawText(invoice.doctor || "Dr. N. Shravan Krishna, B.D.S.", { x: 430, y: yAt(wordY + 12), size: 8, font: helvetica, color: textColor });
+  p1.drawText("32 Smiles Multispeciality Dental Clinic", { x: 430, y: yAt(wordY + 23), size: 7.5, font: helvetica, color: textColor });
+
+  return await doc.save();
+}
+
+/**
+ * Creates a blob URL for previewing or printing the Invoice.
+ */
+export async function generateInvoicePdfBlobUrl(
+  options: GenerateInvoicePdfOptions
+): Promise<string> {
+  const bytes = await generateInvoicePdfBytes(options);
+  return createPdfBlobUrl(bytes);
+}
+
+/**
+ * Generates and downloads the Invoice PDF file.
+ */
+export async function generateAndDownloadInvoicePdf(
+  options: GenerateInvoicePdfOptions
+): Promise<void> {
+  const bytes = await generateInvoicePdfBytes(options);
+  const patientName = (options.invoice.patientName || options.patient?.name || "Patient").replace(/[^a-zA-Z0-9]/g, "_");
+  const filename = `32Smiles_Invoice_${patientName}_${options.invoice.id}.pdf`;
+  downloadPdfBytes(bytes, filename);
+}
+
+/**
+ * Prints the Invoice PDF directly.
+ */
+export async function printInvoicePdf(
+  options: GenerateInvoicePdfOptions
+): Promise<void> {
+  const blobUrl = await generateInvoicePdfBlobUrl(options);
+  printPdfBlob(blobUrl, `Invoice - ${options.invoice.id}`);
 }

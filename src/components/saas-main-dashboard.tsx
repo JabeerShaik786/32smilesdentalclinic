@@ -83,10 +83,23 @@ import autoTable from "jspdf-autotable";
 import { CaseSheetPrintTemplate, getCaseSheetTotalPages } from "@/components/print/CaseSheetPrintTemplate";
 import { PrescriptionPrintTemplate } from "@/components/print/PrescriptionPrintTemplate";
 import { ResponsivePdfPreview } from "@/components/print/ResponsivePdfPreview";
-import { generateAndDownloadPrescriptionPdf } from "@/lib/prescriptionPdfGenerator";
+import {
+  generateAndDownloadPrescriptionPdf,
+  generatePrescriptionPdfBlobUrl,
+  printPrescriptionPdf
+} from "@/lib/prescriptionPdfGenerator";
 import { VRDentalInvoicePrintTemplate } from "@/components/print/VRDentalInvoicePrintTemplate";
-import { generateAndDownloadInvoicePdf } from "@/lib/invoicePdfGenerator";
-import { generateAndDownloadCaseSheetPdf } from "@/lib/caseSheetPdfGenerator";
+import {
+  generateAndDownloadInvoicePdf,
+  generateInvoicePdfBlobUrl,
+  printInvoicePdf
+} from "@/lib/invoicePdfGenerator";
+import {
+  generateAndDownloadCaseSheetPdf,
+  generateCaseSheetPdfBlobUrl,
+  printCaseSheetPdf
+} from "@/lib/caseSheetPdfGenerator";
+import { ExactPdfLiveViewer } from "@/components/print/ExactPdfLiveViewer";
 import { getAssetPath } from "@/lib/getAssetPath";
 import { MedicineCategorySelector } from "@/components/prescription/MedicineCategorySelector";
 import {
@@ -2944,6 +2957,14 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     advice?: string;
   } | null>(null);
 
+  // --- EXACT 32 SMILES PDF OVERLAY PREVIEW STATES ---
+  const [caseSheetBlobUrl, setCaseSheetBlobUrl] = useState<string | null>(null);
+  const [isGeneratingCaseSheetPdf, setIsGeneratingCaseSheetPdf] = useState(false);
+  const [prescriptionBlobUrl, setPrescriptionBlobUrl] = useState<string | null>(null);
+  const [isGeneratingPrescriptionPdf, setIsGeneratingPrescriptionPdf] = useState(false);
+  const [invoiceBlobUrl, setInvoiceBlobUrl] = useState<string | null>(null);
+  const [isGeneratingInvoicePdf, setIsGeneratingInvoicePdf] = useState(false);
+
   // --- INVOICE FORM STATES ---
   const [invProcedure, setInvProcedure] = useState("");
   const [invAmount, setInvAmount] = useState("");
@@ -4306,7 +4327,143 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     return { name, dosage, duration, instructions };
   };
 
-  const handlePrintPrescription = (customData?: {
+  // --- AUTOMATIC EXACT 32 SMILES PDF OVERLAY GENERATION HOOKS ---
+  // 1. Case Sheet live overlay generator
+  useEffect(() => {
+    let isCancelled = false;
+    const updateCaseSheetPreview = async () => {
+      if (!selectedPatientId || isEditingCaseSheet) return;
+      const patientItem = patients.find(p => p.id === selectedPatientId);
+      if (!patientItem) return;
+
+      setIsGeneratingCaseSheetPdf(true);
+      try {
+        const url = await generateCaseSheetPdfBlobUrl({
+          patient: patientItem,
+          medicalHistoryConditions: editMedicalHistoryConditions,
+          medicalHistoryOthers: editMedicalHistoryOthers,
+          currentMedications: editCurrentMedications,
+          chiefComplaint: editChiefComplaint,
+          intraOralExam: editIntraOralExam,
+          provisionalDiagnosis: editProvisionalDiagnosis,
+          treatmentAdvised: formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised,
+          visitDate: patientItem.visit || patientItem.firstVisit,
+          doctorName: doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S.",
+        });
+        if (!isCancelled) {
+          setCaseSheetBlobUrl(prev => {
+            if (prev) URL.revokeObjectURL(prev);
+            return url;
+          });
+        }
+      } catch (err) {
+        console.error("Failed to generate Case Sheet preview overlay:", err);
+      } finally {
+        if (!isCancelled) setIsGeneratingCaseSheetPdf(false);
+      }
+    };
+
+    updateCaseSheetPreview();
+    return () => {
+      isCancelled = true;
+    };
+  }, [
+    selectedPatientId,
+    isEditingCaseSheet,
+    editMedicalHistoryConditions,
+    editMedicalHistoryOthers,
+    editCurrentMedications,
+    editChiefComplaint,
+    editIntraOralExam,
+    editProvisionalDiagnosis,
+    editTreatmentAdvised,
+    patients,
+  ]);
+
+  // 2. Prescription live overlay generator
+  useEffect(() => {
+    let isCancelled = false;
+    const updatePrescriptionPreview = async () => {
+      if (!showPrescriptionPreviewModal) return;
+      const patientItem = patients.find(p => p.id === selectedPatientId);
+      if (!patientItem) return;
+
+      const currentData = activePrintPrescription || {
+        doctorName: prescDoctor || (doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S."),
+        date: prescDate,
+        diagnosis: prescDiagnosis,
+        medicines: prescMeds.filter(m => m.name.trim()),
+        advice: prescAdvice,
+      };
+
+      setIsGeneratingPrescriptionPdf(true);
+      try {
+        const url = await generatePrescriptionPdfBlobUrl({
+          patient: patientItem,
+          doctorName: currentData.doctorName,
+          date: currentData.date,
+          diagnosis: currentData.diagnosis,
+          medicines: currentData.medicines,
+          advice: currentData.advice,
+          parseDosageFn: parseDosageString,
+        });
+        if (!isCancelled) {
+          setPrescriptionBlobUrl(prev => {
+            if (prev) URL.revokeObjectURL(prev);
+            return url;
+          });
+        }
+      } catch (err) {
+        console.error("Failed to generate Prescription preview overlay:", err);
+      } finally {
+        if (!isCancelled) setIsGeneratingPrescriptionPdf(false);
+      }
+    };
+
+    updatePrescriptionPreview();
+    return () => {
+      isCancelled = true;
+    };
+  }, [showPrescriptionPreviewModal, activePrintPrescription, selectedPatientId, prescDoctor, prescDate, prescDiagnosis, prescMeds, prescAdvice, patients]);
+
+  // 3. Invoice live overlay generator
+  useEffect(() => {
+    let isCancelled = false;
+    const updateInvoicePreview = async () => {
+      if (!lastGeneratedReceipt) {
+        setInvoiceBlobUrl(null);
+        return;
+      }
+      const patientObj = patients.find(p => p.id === lastGeneratedReceipt.patientId || p.name === lastGeneratedReceipt.patientName) || null;
+
+      setIsGeneratingInvoicePdf(true);
+      try {
+        const url = await generateInvoicePdfBlobUrl({
+          patient: patientObj,
+          invoice: lastGeneratedReceipt,
+        });
+        if (!isCancelled) {
+          setInvoiceBlobUrl(prev => {
+            if (prev) URL.revokeObjectURL(prev);
+            return url;
+          });
+        }
+      } catch (err) {
+        console.error("Failed to generate Invoice preview overlay:", err);
+      } finally {
+        if (!isCancelled) setIsGeneratingInvoicePdf(false);
+      }
+    };
+
+    updateInvoicePreview();
+    return () => {
+      isCancelled = true;
+    };
+  }, [lastGeneratedReceipt, patients]);
+
+  // --- ACTIONS: PRINT & DOWNLOAD USING EXACT 32 SMILES TEMPLATES ---
+
+  const handlePrintPrescription = async (customData?: {
     doctorName?: string;
     date?: string;
     diagnosis?: string;
@@ -4319,41 +4476,27 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       return;
     }
 
-    if (customData) {
-      setActivePrintPrescription(customData);
-      setActivePrintDoc("prescription");
-      setTimeout(() => {
-        window.print();
-      }, 50);
+    const medsToUse = customData?.medicines || prescMeds.filter(m => m.name.trim());
+    if (medsToUse.length === 0) {
+      showToast("Please enter at least one medicine before printing.", "error");
       return;
     }
 
-    if (prescMeds.length === 0 || prescMeds.some(m => !m.name.trim())) {
-      showToast("All medicines must have a name.", "error");
-      return;
+    try {
+      await printPrescriptionPdf({
+        patient: patientItem,
+        doctorName: customData?.doctorName || prescDoctor || (doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S."),
+        date: customData?.date || prescDate,
+        diagnosis: customData?.diagnosis || prescDiagnosis,
+        medicines: medsToUse,
+        advice: customData?.advice || prescAdvice,
+        parseDosageFn: parseDosageString,
+      });
+      showToast("Sent prescription to printer.", "success");
+    } catch (err) {
+      console.error("Print prescription error:", err);
+      showToast("Failed to print prescription.", "error");
     }
-
-    const missingDosageTime = prescMeds.some(m => {
-      const parsed = parseDosageString(m.dosage);
-      return !parsed.morning && !parsed.afternoon && !parsed.night;
-    });
-
-    if (missingDosageTime) {
-      showToast("Please select at least one dosage time (Morning, Afternoon, or Night) for all medicines.", "error");
-      return;
-    }
-
-    setActivePrintPrescription({
-      doctorName: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
-      date: prescDate,
-      diagnosis: prescDiagnosis,
-      medicines: prescMeds.filter(m => m.name.trim()),
-      advice: prescAdvice,
-    });
-    setActivePrintDoc("prescription");
-    setTimeout(() => {
-      window.print();
-    }, 50);
   };
 
   const handleDownloadPrescriptionPDF = async (customData?: {
@@ -4378,7 +4521,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     try {
       await generateAndDownloadPrescriptionPdf({
         patient: patientItem,
-        doctorName: customData?.doctorName || prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+        doctorName: customData?.doctorName || prescDoctor || (doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S."),
         date: customData?.date || prescDate,
         diagnosis: customData?.diagnosis || prescDiagnosis,
         medicines: medsToUse,
@@ -4400,33 +4543,22 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     }
 
     try {
-      // 1. Ensure the background case sheet template image is preloaded in browser memory
-      const templateUrl = getAssetPath("/vrcasesheet.jpeg");
-      const img = new Image();
-      img.src = templateUrl;
-      if (!img.complete) {
-        await new Promise<void>((resolve) => {
-          img.onload = () => resolve();
-          img.onerror = () => resolve();
-        });
-      }
-
-      // 2. Ensure web fonts and document layout have decoded completely
-      if (typeof document !== "undefined" && document.fonts) {
-        await document.fonts.ready;
-      }
-
-      // 3. Set print document state to "casesheet"
-      setActivePrintDoc("casesheet");
-
-      // 4. Delay slightly to allow React to flush state and DOM updates before opening print dialog
-      setTimeout(() => {
-        window.print();
-      }, 100);
+      await printCaseSheetPdf({
+        patient: patientItem,
+        medicalHistoryConditions: editMedicalHistoryConditions,
+        medicalHistoryOthers: editMedicalHistoryOthers,
+        currentMedications: editCurrentMedications,
+        chiefComplaint: editChiefComplaint,
+        intraOralExam: editIntraOralExam,
+        provisionalDiagnosis: editProvisionalDiagnosis,
+        treatmentAdvised: formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised,
+        visitDate: patientItem.visit || patientItem.firstVisit,
+        doctorName: doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S.",
+      });
+      showToast("Sent Case Sheet to printer.", "success");
     } catch (err) {
       console.error("Print case sheet error:", err);
-      setActivePrintDoc("casesheet");
-      window.print();
+      showToast("Failed to print Case Sheet.", "error");
     }
   };
 
@@ -4448,6 +4580,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         provisionalDiagnosis: editProvisionalDiagnosis,
         treatmentAdvised: formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised,
         visitDate: patientItem.visit || patientItem.firstVisit,
+        doctorName: doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S.",
       });
       showToast("Case Sheet PDF downloaded successfully.", "success");
     } catch (err) {
@@ -4463,37 +4596,17 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       return;
     }
 
+    const patientObj = patients.find(p => p.id === inv.patientId || p.name === inv.patientName) || null;
+
     try {
-      // 1. Ensure the background letterhead template image is preloaded in browser memory
-      const letterheadUrl = getAssetPath("/vr_letterhead.png");
-      const img = new Image();
-      img.src = letterheadUrl;
-      if (!img.complete) {
-        await new Promise<void>((resolve) => {
-          img.onload = () => resolve();
-          img.onerror = () => resolve();
-        });
-      }
-
-      // 2. Ensure web fonts and document layout have decoded completely
-      if (typeof document !== "undefined" && document.fonts) {
-        await document.fonts.ready;
-      }
-
-      // 3. Ensure receipt state is set so #print-area is populated in the DOM
-      if (inv !== lastGeneratedReceipt) {
-        setLastGeneratedReceipt(inv);
-      }
-      setActivePrintDoc("invoice");
-
-      // 4. Delay slightly to allow React to flush state and DOM updates before opening print dialog
-      setTimeout(() => {
-        window.print();
-      }, 100);
+      await printInvoicePdf({
+        patient: patientObj,
+        invoice: inv,
+      });
+      showToast("Sent invoice to printer.", "success");
     } catch (err) {
       console.error("Print invoice error:", err);
-      setActivePrintDoc("invoice");
-      window.print();
+      showToast("Failed to print invoice.", "error");
     }
   };
 
@@ -9535,30 +9648,13 @@ ${clinicName}`;
 
                 {/* EXACT CASE SHEET PRESENTATION (WHEN VIEWING ON SCREEN) */}
                 {!isEditingCaseSheet ? (
-                  <div className="bg-slate-200/80 dark:bg-slate-900/80 p-2 sm:p-6 rounded-xl flex flex-col items-center border border-slate-300 dark:border-slate-800 animate-fadeIn print:hidden shadow-inner w-full">
-                    {(() => {
-                      const activeTreatmentAdvisedStr = formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised || "";
-                      const totalCaseSheetPages = getCaseSheetTotalPages(activeTreatmentAdvisedStr);
-
-                      return (
-                        <ResponsivePdfPreview
-                          pageCount={totalCaseSheetPages}
-                          title="Dental Case Sheet"
-                        >
-                          <CaseSheetPrintTemplate
-                            patient={patientItem}
-                            medicalHistoryConditions={editMedicalHistoryConditions}
-                            medicalHistoryOthers={editMedicalHistoryOthers}
-                            currentMedications={editCurrentMedications}
-                            chiefComplaint={editChiefComplaint}
-                            intraOralExam={editIntraOralExam}
-                            provisionalDiagnosis={editProvisionalDiagnosis}
-                            treatmentAdvised={activeTreatmentAdvisedStr}
-                            visitDate={patientItem.visit || patientItem.firstVisit}
-                          />
-                        </ResponsivePdfPreview>
-                      );
-                    })()}
+                  <div className="bg-slate-200/80 dark:bg-slate-900/80 p-2 sm:p-4 rounded-xl flex flex-col items-center border border-slate-300 dark:border-slate-800 animate-fadeIn print:hidden shadow-inner w-full">
+                    <ExactPdfLiveViewer
+                      blobUrl={caseSheetBlobUrl}
+                      loading={isGeneratingCaseSheetPdf}
+                      title="32 Smiles Dental Case Sheet"
+                      minHeight="850px"
+                    />
                   </div>
                 ) : (
                   /* Digital Dental Case Sheet Editor Container (When Editing) */
@@ -11944,23 +12040,14 @@ ${clinicName}`;
                           </div>
                         </div>
 
-                        {/* Modal Body with Zoom / Scroll */}
-                        <div className="flex-1 overflow-y-auto p-2 sm:p-6 bg-slate-200/80 dark:bg-slate-950/80 flex justify-center shadow-inner">
-                          <ResponsivePdfPreview
-                            pageCount={2}
-                            pageHeightPx={1059}
-                            title="Official Prescription"
-                          >
-                            <PrescriptionPrintTemplate
-                              patient={pItem}
-                              doctorName={currentData.doctorName}
-                              date={currentData.date}
-                              diagnosis={currentData.diagnosis}
-                              medicines={currentData.medicines}
-                              advice={currentData.advice}
-                              parseDosageFn={parseDosageString}
-                            />
-                          </ResponsivePdfPreview>
+                        {/* Modal Body with Live Vector PDF View */}
+                        <div className="flex-1 overflow-y-auto p-2 sm:p-4 bg-slate-200/80 dark:bg-slate-950/80 flex justify-center shadow-inner">
+                          <ExactPdfLiveViewer
+                            blobUrl={prescriptionBlobUrl}
+                            loading={isGeneratingPrescriptionPdf}
+                            title="32 Smiles Official Prescription"
+                            minHeight="800px"
+                          />
                         </div>
                       </div>
                     </div>
@@ -17844,18 +17931,14 @@ ${clinicName}`;
                 </div>
               </div>
 
-              {/* Responsive Zoomable Letterhead Stationery View (Screen) */}
-              <div className="flex-1 overflow-y-auto p-2 sm:p-6 bg-slate-200/80 dark:bg-slate-950/80 flex justify-center shadow-inner no-print">
-                <ResponsivePdfPreview
-                  pageCount={1}
-                  pageHeightPx={1123}
-                  title="Official Invoice"
-                >
-                  <VRDentalInvoicePrintTemplate
-                    patient={patientObj}
-                    invoice={lastGeneratedReceipt}
-                  />
-                </ResponsivePdfPreview>
+              {/* Exact 32 Smiles Vector PDF Invoice View (Screen) */}
+              <div className="flex-1 overflow-y-auto p-2 sm:p-4 bg-slate-200/80 dark:bg-slate-950/80 flex justify-center shadow-inner no-print">
+                <ExactPdfLiveViewer
+                  blobUrl={invoiceBlobUrl}
+                  loading={isGeneratingInvoicePdf}
+                  title="32 Smiles Official Invoice"
+                  minHeight="800px"
+                />
               </div>
             </div>
           </div>
