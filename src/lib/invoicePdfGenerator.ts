@@ -1,7 +1,48 @@
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { PDFDocument, rgb, degrees, StandardFonts, PDFFont, RGB } from "pdf-lib";
 import { loadTemplateBytes } from "./pdfTemplateLoader";
 import { wrapText, downloadPdfBytes, createPdfBlobUrl, printPdfBlob } from "./pdfUtils";
-import { numberToWords } from "@/components/print/VRDentalInvoicePrintTemplate";
+
+/**
+ * Converts a numeric amount to Indian currency words format.
+ */
+function convertNumberToWords(amount: number): string {
+  if (isNaN(amount) || amount <= 0) return "Zero Rupees Only";
+
+  const singleDigits = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine"];
+  const teens = ["Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
+  const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
+
+  function convertTwoDigits(n: number): string {
+    if (n < 10) return singleDigits[n];
+    if (n >= 10 && n < 20) return teens[n - 10];
+    return `${tens[Math.floor(n / 10)]} ${singleDigits[n % 10]}`.trim();
+  }
+
+  function convertThreeDigits(n: number): string {
+    const h = Math.floor(n / 100);
+    const r = n % 100;
+    const hStr = h > 0 ? `${singleDigits[h]} Hundred` : "";
+    const rStr = r > 0 ? convertTwoDigits(r) : "";
+    return [hStr, rStr].filter(Boolean).join(" and ");
+  }
+
+  let num = Math.floor(amount);
+  const crore = Math.floor(num / 10000000);
+  num %= 10000000;
+  const lakh = Math.floor(num / 100000);
+  num %= 100000;
+  const thousand = Math.floor(num / 1000);
+  num %= 1000;
+  const hundred = num;
+
+  const parts: string[] = [];
+  if (crore > 0) parts.push(`${convertTwoDigits(crore)} Crore`);
+  if (lakh > 0) parts.push(`${convertTwoDigits(lakh)} Lakh`);
+  if (thousand > 0) parts.push(`${convertTwoDigits(thousand)} Thousand`);
+  if (hundred > 0) parts.push(convertThreeDigits(hundred));
+
+  return `${parts.join(" ")} Rupees Only`.replace(/\s+/g, " ").trim();
+}
 
 export interface GenerateInvoicePdfOptions {
   patient?: {
@@ -35,203 +76,134 @@ export interface GenerateInvoicePdfOptions {
     paymentDate?: string;
     paymentLogs?: { method: string; amount: number; date: string }[];
   };
+  doctorName?: string;
+  treatmentSummary?: string;
 }
 
 /**
- * Generates the Invoice PDF bytes using strict PDF-overlay onto the original template.
+ * Generates the Invoice / Receipt PDF bytes using strict PDF-overlay onto the replacement template (public/invoice.pdf).
  */
 export async function generateInvoicePdfBytes(
   options: GenerateInvoicePdfOptions
 ): Promise<Uint8Array> {
-  const { patient, invoice } = options;
+  const { patient, invoice, doctorName } = options;
+  const inv = invoice || ({} as any);
 
   const templateBytes = await loadTemplateBytes("invoice");
   const doc = await PDFDocument.load(templateBytes);
   const helvetica = await doc.embedFont(StandardFonts.Helvetica);
   const helveticaBold = await doc.embedFont(StandardFonts.HelveticaBold);
   const textColor = rgb(0.08, 0.12, 0.2); // Crisp dark slate
+  const primaryBlue = rgb(0.01, 0.22, 0.55);
 
   const pages = doc.getPages();
   const p1 = pages[0];
-  const { height: p1H } = p1.getSize();
-  const yAt = (fitzY: number) => p1H - fitzY;
 
-  const patientName = invoice.patientName || patient?.name || "Patient";
-  const rawDate = invoice.paymentDate || new Date().toISOString().split("T")[0];
-  const formattedDate = rawDate.includes("T") ? rawDate.split("T")[0] : rawDate.split(" ")[0];
-
-  const subtotal = invoice.subtotal || 0;
-  const paidAmount = invoice.paidAmount || 0;
-  const total = invoice.total || subtotal;
-  const balance = Math.max(0, total - paidAmount);
-
-  const ageGender = patient?.age ? `${patient.age} Y ${patient.gender ? `/ ${patient.gender}` : ""}`.trim() : "";
-  const phone = patient?.phone || "";
-
-  // ==========================================
-  // INVOICE BODY (fitzY = 175 to 760)
-  // ==========================================
-
-  // 1. Invoice Metadata Grid (fitzY: 175 to 215)
-  // Left column: Invoice No & Date
-  p1.drawText("Invoice No :", { x: 36, y: yAt(178), size: 9, font: helveticaBold, color: textColor });
-  p1.drawText(invoice.id || "INV-001", { x: 100, y: yAt(178), size: 9, font: helvetica, color: textColor });
-
-  p1.drawText("Date :", { x: 36, y: yAt(196), size: 9, font: helveticaBold, color: textColor });
-  p1.drawText(formattedDate, { x: 100, y: yAt(196), size: 9, font: helvetica, color: textColor });
-
-  // Right column: Patient Name & Age/Gender/Phone
-  p1.drawText("Patient Name :", { x: 300, y: yAt(178), size: 9, font: helveticaBold, color: textColor });
-  p1.drawText(patientName, { x: 375, y: yAt(178), size: 9, font: helvetica, color: textColor });
-
-  const extraInfo = [ageGender, phone ? `Phone: ${phone}` : ""].filter(Boolean).join("    ");
-  if (extraInfo) {
-    p1.drawText("Age / Contact :", { x: 300, y: yAt(196), size: 9, font: helveticaBold, color: textColor });
-    p1.drawText(extraInfo, { x: 375, y: yAt(196), size: 9, font: helvetica, color: textColor });
-  }
-
-  // Divider line
-  p1.drawLine({
-    start: { x: 36, y: yAt(212) },
-    end: { x: 560, y: yAt(212) },
-    thickness: 0.75,
-    color: rgb(0.8, 0.85, 0.9),
-  });
-
-  // 2. Treatments Table Header (fitzY: 224 to 242)
-  p1.drawRectangle({
-    x: 36,
-    y: yAt(242),
-    width: 524,
-    height: 18,
-    color: rgb(0.93, 0.96, 0.99),
-  });
-
-  p1.drawText("Sl No.", { x: 45, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
-  p1.drawText("Treatment Details", { x: 95, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
-  p1.drawText("Qty", { x: 360, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
-  p1.drawText("Unit Price (Rs.)", { x: 410, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
-  p1.drawText("Amount (Rs.)", { x: 500, y: yAt(231), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
-
-  // 3. Treatment Table Items
-  const items = invoice.items && invoice.items.length > 0
-    ? invoice.items
-    : [{ description: invoice.treatment || "Dental Treatment", quantity: 1, unitPrice: subtotal, amount: subtotal }];
-
-  let curY = 258;
-  items.forEach((it, idx) => {
-    if (curY > 520) return; // Prevent overflowing table
-
-    const sNoStr = String(idx + 1);
-    const qtyStr = it.quantity !== undefined ? String(it.quantity) : "1";
-    const unitPrice = it.unitPrice !== undefined ? it.unitPrice : it.amount;
-    const unitPriceStr = Number(unitPrice || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    const amountStr = Number(it.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-    p1.drawText(sNoStr, { x: 52, y: yAt(curY), size: 8.5, font: helvetica, color: textColor });
-    
-    // Wrap description if long
-    const descLines = wrapText(it.description || "Dental Procedure", helvetica, 8.5, 255);
-    p1.drawText(descLines[0] || "", { x: 95, y: yAt(curY), size: 8.5, font: helvetica, color: textColor });
-
-    p1.drawText(qtyStr, { x: 368, y: yAt(curY), size: 8.5, font: helvetica, color: textColor });
-
-    const upW = helvetica.widthOfTextAtSize(unitPriceStr, 8.5);
-    p1.drawText(unitPriceStr, { x: 470 - upW, y: yAt(curY), size: 8.5, font: helvetica, color: textColor });
-
-    const amW = helveticaBold.widthOfTextAtSize(amountStr, 8.5);
-    p1.drawText(amountStr, { x: 555 - amW, y: yAt(curY), size: 8.5, font: helveticaBold, color: textColor });
-
-    curY += 18;
-    p1.drawLine({
-      start: { x: 36, y: yAt(curY - 6) },
-      end: { x: 560, y: yAt(curY - 6) },
-      thickness: 0.5,
-      color: rgb(0.9, 0.92, 0.95),
+  // Helper to draw text at visual portrait coordinates (X: left 0..595, Y: top 0..842)
+  const drawP1Text = (
+    text: string,
+    visX: number,
+    visY_top: number,
+    opts: { font?: PDFFont; size?: number; color?: RGB } = {}
+  ) => {
+    if (!text) return;
+    const font = opts.font || helvetica;
+    const size = opts.size || 9;
+    const color = opts.color || textColor;
+    const x = 841.68 - visY_top;
+    const y = 595.08 - visX;
+    p1.drawText(text, {
+      x,
+      y,
+      size,
+      font,
+      color,
+      rotate: degrees(270),
     });
-  });
-
-  // 4. Financial Summary (Right aligned, x: 340 to 560)
-  let sumY = curY + 10;
-  const grossStr = Number(subtotal).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const totalStr = Number(total).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const paidStr = Number(paidAmount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const balStr = Number(balance).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const drawSummaryLine = (label: string, val: string, isBold = false, isAccent = false) => {
-    p1.drawText(label, { x: 350, y: yAt(sumY), size: 8.5, font: isBold ? helveticaBold : helvetica, color: textColor });
-    const valFont = isBold ? helveticaBold : helvetica;
-    const valColor = isAccent ? rgb(0.01, 0.45, 0.25) : textColor;
-    const vW = valFont.widthOfTextAtSize(val, 8.5);
-    p1.drawText(val, { x: 555 - vW, y: yAt(sumY), size: 8.5, font: valFont, color: valColor });
-    sumY += 14;
   };
 
-  drawSummaryLine("Gross Amount (Rs.) :", grossStr);
+  const patientName = inv.patientName || patient?.name || "";
+  const rawDate = inv.paymentDate || "";
+  const formattedDate = rawDate ? (rawDate.includes("T") ? rawDate.split("T")[0] : rawDate.split(" ")[0]) : "";
 
-  if (invoice.discount) {
-    const discStr = Number(invoice.discount).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    drawSummaryLine("Discount (Rs.) :", `- ${discStr}`);
+  const subtotal = inv.subtotal || 0;
+  const paidAmount = inv.paidAmount ?? (inv.total || subtotal);
+  const total = inv.total || subtotal;
+  const balance = Math.max(0, total - paidAmount);
+
+  // 1. Receipt / Invoice No (x: 52..200, y_top: 241 aligned with "No." baseline)
+  const invNo = inv.id || "";
+  if (invNo) {
+    drawP1Text(invNo, 52, 241, { font: helveticaBold, size: 9.5, color: primaryBlue });
   }
 
-  p1.drawLine({
-    start: { x: 350, y: yAt(sumY - 4) },
-    end: { x: 555, y: yAt(sumY - 4) },
-    thickness: 0.5,
-    color: rgb(0.8, 0.85, 0.9),
-  });
-
-  drawSummaryLine("Total Amount (Rs.) :", totalStr, true);
-  drawSummaryLine("Amount Paid (Rs.) :", paidStr, true, true);
-  drawSummaryLine("Balance Due (Rs.) :", balStr, true);
-
-  // 5. Payment Details Section Box
-  let payY = sumY + 8;
-  p1.drawRectangle({
-    x: 36,
-    y: yAt(payY + 14),
-    width: 524,
-    height: 14,
-    color: rgb(0.95, 0.96, 0.98),
-  });
-  p1.drawText("Payment Details", { x: 42, y: yAt(payY + 3), size: 8, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
-
-  payY += 16;
-  p1.drawText("Receipt No", { x: 45, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
-  p1.drawText("Amt Received (Rs.)", { x: 130, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
-  p1.drawText("Payment Mode", { x: 250, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
-  p1.drawText("Date", { x: 360, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
-  p1.drawText("Reference / Bank", { x: 450, y: yAt(payY + 4), size: 7.5, font: helveticaBold, color: textColor });
-
-  payY += 14;
-  if (invoice.paymentLogs && invoice.paymentLogs.length > 0) {
-    invoice.paymentLogs.slice(0, 3).forEach((log, idx) => {
-      const logAmtStr = Number(log.amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-      p1.drawText(`REC-10${idx + 1}`, { x: 45, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
-      p1.drawText(logAmtStr, { x: 130, y: yAt(payY + 4), size: 8, font: helveticaBold, color: rgb(0.01, 0.45, 0.25) });
-      p1.drawText(log.method || "Cash", { x: 250, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
-      p1.drawText(log.date || formattedDate, { x: 360, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
-      p1.drawText("-", { x: 450, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
-      payY += 12;
-    });
-  } else {
-    p1.drawText("REC-101", { x: 45, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
-    p1.drawText(paidStr, { x: 130, y: yAt(payY + 4), size: 8, font: helveticaBold, color: rgb(0.01, 0.45, 0.25) });
-    p1.drawText("Cash", { x: 250, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
-    p1.drawText(formattedDate, { x: 360, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
-    p1.drawText("-", { x: 450, y: yAt(payY + 4), size: 8, font: helvetica, color: textColor });
+  // 2. Date (x: 458..540, y_top: 240 aligned with "Date :" baseline)
+  if (formattedDate) {
+    drawP1Text(formattedDate, 458, 240, { font: helveticaBold, size: 9.5 });
   }
 
-  // 6. Dynamic Amount in Words & Authorised Signatory Block
-  const wordY = Math.max(payY + 36, 680);
-  p1.drawText("Amount in Words:", { x: 36, y: yAt(wordY), size: 8, font: helveticaBold, color: textColor });
-  const inWords = numberToWords(paidAmount || total);
-  p1.drawText(inWords, { x: 36, y: yAt(wordY + 12), size: 8.5, font: helveticaBold, color: rgb(0.01, 0.25, 0.5) });
+  // 3. Received with thanks from (x: 210..540, y_top: 276.5 sitting on Line 1)
+  if (patientName) {
+    const nameLines = wrapText(patientName, helveticaBold, 9.5, 330);
+    drawP1Text(nameLines[0] || patientName, 210, 276.5, { font: helveticaBold, size: 9.5 });
+    if (nameLines[1]) {
+      drawP1Text(nameLines.slice(1).join(" "), 35, 306.0, { font: helveticaBold, size: 9 });
+    }
+  }
 
-  // Signatory Block on right
-  p1.drawText("Authorised Signatory", { x: 430, y: yAt(wordY), size: 8.5, font: helveticaBold, color: textColor });
-  p1.drawText(invoice.doctor || "Dr. N. Shravan Krishna, B.D.S.", { x: 430, y: yAt(wordY + 12), size: 8, font: helvetica, color: textColor });
-  p1.drawText("32 Smiles Multispeciality Dental Clinic", { x: 430, y: yAt(wordY + 23), size: 7.5, font: helvetica, color: textColor });
+  // 4. The sum of Rupees (in words) (x: 142..540, y_top: 335.0 sitting on Line 3)
+  const effectiveAmount = paidAmount > 0 ? paidAmount : total;
+  if (effectiveAmount > 0) {
+    const wordsStr = convertNumberToWords(effectiveAmount);
+    const wordLines = wrapText(wordsStr, helveticaBold, 9, 395);
+    drawP1Text(wordLines[0] || wordsStr, 142, 335.0, { font: helveticaBold, size: 9, color: primaryBlue });
+    if (wordLines[1]) {
+      drawP1Text(wordLines.slice(1).join(" "), 35, 363.5, { font: helveticaBold, size: 8.5 });
+    }
+  }
+
+  // 5. Towards (Treatment Details & Summary) (x: 86..540, y_top: 363.5 sitting on Line 4)
+  let treatmentSummary = "";
+  if (inv.items && inv.items.length > 0) {
+    treatmentSummary = inv.items.map(it => it.description).filter(Boolean).join(", ");
+  } else if (inv.treatment) {
+    treatmentSummary = inv.treatment.trim();
+  }
+
+  // Append financial context if balance or discount exists
+  const notes: string[] = [];
+  if (inv.discount && inv.discount > 0) {
+    notes.push(`Disc: Rs. ${Number(inv.discount).toLocaleString("en-IN")}`);
+  }
+  if (total !== effectiveAmount && total > 0) {
+    notes.push(`Total: Rs. ${total.toLocaleString("en-IN")}`);
+  }
+  if (balance > 0) {
+    notes.push(`Bal: Rs. ${balance.toLocaleString("en-IN")}`);
+  }
+  if (notes.length > 0) {
+    treatmentSummary = treatmentSummary ? `${treatmentSummary} (${notes.join(", ")})` : `(${notes.join(", ")})`;
+  }
+
+  if (treatmentSummary) {
+    const treatLines = wrapText(treatmentSummary, helvetica, 9, 450);
+    drawP1Text(treatLines[0] || treatmentSummary, 86, 363.5, { font: helvetica, size: 9 });
+    if (treatLines[1]) {
+      drawP1Text(treatLines.slice(1).join(" "), 35, 393.0, { font: helvetica, size: 8.5 });
+    }
+  }
+
+  // 6. Rs. [       ] Box (x: 85..205, y_top: 458 inside rectangular box)
+  if (effectiveAmount > 0) {
+    const amtFormatted = `${effectiveAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}/-`;
+    drawP1Text(amtFormatted, 85, 458, { font: helveticaBold, size: 12, color: primaryBlue });
+  }
+
+  // 7. Signature (x: 425..530, y_top: 448 directly above "Signature" label)
+  const docSignatory = (inv.doctor || options.doctorName || "").trim();
+  if (docSignatory) {
+    drawP1Text(docSignatory, 425, 448, { font: helveticaBold, size: 8.5 });
+  }
 
   return await doc.save();
 }
@@ -254,7 +226,7 @@ export async function generateAndDownloadInvoicePdf(
 ): Promise<void> {
   const bytes = await generateInvoicePdfBytes(options);
   const patientName = (options.invoice.patientName || options.patient?.name || "Patient").replace(/[^a-zA-Z0-9]/g, "_");
-  const filename = `32Smiles_Invoice_${patientName}_${options.invoice.id}.pdf`;
+  const filename = `32Smiles_Receipt_${patientName}_${options.invoice.id}.pdf`;
   downloadPdfBytes(bytes, filename);
 }
 
@@ -265,5 +237,5 @@ export async function printInvoicePdf(
   options: GenerateInvoicePdfOptions
 ): Promise<void> {
   const blobUrl = await generateInvoicePdfBlobUrl(options);
-  printPdfBlob(blobUrl, `Invoice - ${options.invoice.id}`);
+  printPdfBlob(blobUrl, `Receipt - ${options.invoice.id}`);
 }

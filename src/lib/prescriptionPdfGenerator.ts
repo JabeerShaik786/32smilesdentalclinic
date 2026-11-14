@@ -1,4 +1,4 @@
-import { PDFDocument, rgb, StandardFonts } from "pdf-lib";
+import { PDFDocument, rgb, degrees, StandardFonts, PDFFont, RGB } from "pdf-lib";
 import { loadTemplateBytes } from "./pdfTemplateLoader";
 import { wrapText, downloadPdfBytes, createPdfBlobUrl, printPdfBlob } from "./pdfUtils";
 import { getCleanMedicalAlert } from "./medicalAlertUtils";
@@ -39,14 +39,14 @@ export interface GeneratePrescriptionPdfOptions {
 }
 
 /**
- * Generates the Prescription PDF bytes using strict PDF-overlay onto the original template.
+ * Generates the Prescription PDF bytes using strict PDF-overlay onto the replacement template (public/prescription.pdf).
  */
 export async function generatePrescriptionPdfBytes(
   options: GeneratePrescriptionPdfOptions
 ): Promise<Uint8Array> {
   const {
     patient,
-    doctorName = "Dr. N. Shravan Krishna, B.D.S.",
+    doctorName = "",
     date,
     nextAppointment = "",
     diagnosis = "",
@@ -64,8 +64,29 @@ export async function generatePrescriptionPdfBytes(
 
   const pages = doc.getPages();
   const p1 = pages[0];
-  const { height: p1H } = p1.getSize();
-  const yAt = (fitzY: number) => p1H - fitzY;
+
+  // Helper to draw text at visual portrait coordinates (X: left 0..595, Y: top 0..842)
+  const drawP1Text = (
+    text: string,
+    visX: number,
+    visY_top: number,
+    opts: { font?: PDFFont; size?: number; color?: RGB } = {}
+  ) => {
+    if (!text) return;
+    const font = opts.font || helvetica;
+    const size = opts.size || 9;
+    const color = opts.color || textColor;
+    const x = 841.68 - visY_top;
+    const y = 595.08 - visX;
+    p1.drawText(text, {
+      x,
+      y,
+      size,
+      font,
+      color,
+      rotate: degrees(270),
+    });
+  };
 
   const displayDate =
     date ||
@@ -83,143 +104,155 @@ export async function generatePrescriptionPdfBytes(
   // ==========================================
 
   // 1. Patient Header Information
-  p1.drawText(patient.name || "Patient", { x: 55, y: yAt(168), size: 10, font: helveticaBold, color: textColor });
-  if (ageGenderStr) {
-    p1.drawText(ageGenderStr, { x: 75, y: yAt(185), size: 9.5, font: helveticaBold, color: textColor });
+  // Name (x: 78..450, y_top: 217) - 6 pt padding after printed 'Name :'
+  if (patient.name) {
+    drawP1Text(patient.name.trim(), 78, 217, { font: helveticaBold, size: 10 });
   }
 
-  p1.drawText(displayDate, { x: 496, y: yAt(163), size: 9.5, font: helveticaBold, color: textColor });
+  // Age / Sex (x: 96..450, y_top: 235) - 8 pt padding after printed 'Age / Sex :'
+  if (ageGenderStr) {
+    drawP1Text(ageGenderStr, 96, 235, { font: helveticaBold, size: 9.5 });
+  }
 
-  const nextApptStr = nextAppointment || "Review after 5 days / As Advised";
-  p1.drawText(nextApptStr, { x: 462, y: yAt(196), size: 8.5, font: helveticaBold, color: textColor });
+  // Date (x: 500..575, y_top: 217)
+  if (displayDate) {
+    drawP1Text(displayDate, 500, 217, { font: helveticaBold, size: 9.5 });
+  }
+
+  // Next Appointment (x: 468..575, y_top: 248) - positioned on line below 'Next Appointment :'
+  const nextApptStr = nextAppointment ? nextAppointment.trim() : "";
+  if (nextApptStr) {
+    drawP1Text(nextApptStr, 468, 248, { font: helveticaBold, size: 8.5 });
+  }
 
   // 2. Right-Hand Column: Diagnosis, Medical Alert, Advice, Doctor Signature
-  // Bounded within x = 458 to 585 (width = 127 pt)
-  let rightColY = 224;
+  // Bounded within x = 468 to 575 (width = 107 pt)
+  let rightColY = 275;
 
-  if (diagnosis.trim()) {
-    p1.drawText("DIAGNOSIS:", { x: 460, y: yAt(rightColY), size: 8, font: helveticaBold, color: rgb(0.01, 0.32, 0.68) });
+  if (diagnosis && diagnosis.trim()) {
+    drawP1Text("DIAGNOSIS:", 468, rightColY, { font: helveticaBold, size: 8, color: rgb(0.01, 0.32, 0.68) });
     rightColY += 12;
-    const diagLines = wrapText(diagnosis.trim(), helvetica, 7.8, 125);
+    const diagLines = wrapText(diagnosis.trim(), helvetica, 7.8, 107);
     diagLines.slice(0, 5).forEach((line) => {
-      p1.drawText(line, { x: 460, y: yAt(rightColY), size: 7.8, font: helvetica, color: textColor });
-      rightColY += 10.5;
+      drawP1Text(line, 468, rightColY, { font: helvetica, size: 7.8 });
+      rightColY += 11;
     });
     rightColY += 6;
   }
 
-  if (medicalAlert.trim()) {
-    p1.drawText("MEDICAL ALERT:", { x: 460, y: yAt(rightColY), size: 8, font: helveticaBold, color: rgb(0.8, 0.1, 0.1) });
+  if (medicalAlert && medicalAlert.trim()) {
+    drawP1Text("MEDICAL ALERT:", 468, rightColY, { font: helveticaBold, size: 8, color: rgb(0.8, 0.1, 0.1) });
     rightColY += 12;
-    const alertLines = wrapText(medicalAlert.trim(), helvetica, 7.8, 125);
+    const alertLines = wrapText(medicalAlert.trim(), helvetica, 7.8, 107);
     alertLines.slice(0, 4).forEach((line) => {
-      p1.drawText(line, { x: 460, y: yAt(rightColY), size: 7.8, font: helvetica, color: textColor });
-      rightColY += 10.5;
+      drawP1Text(line, 468, rightColY, { font: helvetica, size: 7.8 });
+      rightColY += 11;
     });
     rightColY += 6;
   }
 
-  const adviceText = advice.trim() || "1. Take medications strictly after meals.\n2. Warm saline rinses 3-4 times daily.\n3. Avoid hot/hard foods on treatment site.\n4. Complete prescribed medicine course.";
-  p1.drawText("ADVICE & NOTES:", { x: 460, y: yAt(rightColY), size: 8, font: helveticaBold, color: rgb(0.01, 0.32, 0.68) });
-  rightColY += 12;
-  const adviceLines = wrapText(adviceText, helvetica, 7.5, 125);
-  adviceLines.slice(0, 10).forEach((line) => {
-    if (rightColY < 710) {
-      p1.drawText(line, { x: 460, y: yAt(rightColY), size: 7.5, font: helvetica, color: textColor });
-      rightColY += 10.5;
-    }
-  });
+  const adviceText = advice ? advice.trim() : "";
+  if (adviceText) {
+    drawP1Text("ADVICE & NOTES:", 468, rightColY, { font: helveticaBold, size: 8, color: rgb(0.01, 0.32, 0.68) });
+    rightColY += 12;
+    const adviceLines = wrapText(adviceText, helvetica, 7.5, 107);
+    adviceLines.slice(0, 10).forEach((line) => {
+      if (rightColY < 670) {
+        drawP1Text(line, 468, rightColY, { font: helvetica, size: 7.5 });
+        rightColY += 10.5;
+      }
+    });
+  }
 
   // Doctor Signature at bottom right
-  p1.drawText(doctorName, { x: 460, y: yAt(730), size: 8.5, font: helveticaBold, color: textColor });
-  p1.drawText("Consultant Dental Surgeon", { x: 460, y: yAt(742), size: 7.5, font: helvetica, color: textColor });
+  const docToPrint = doctorName ? doctorName.trim() : "";
+  if (docToPrint) {
+    drawP1Text(docToPrint, 468, 685, { font: helveticaBold, size: 8.5 });
+    drawP1Text("Consultant Dental Surgeon", 468, 698, { font: helvetica, size: 7.5 });
+  }
 
-  // 3. Left-Hand Column: Prescribed Medicines (Under Rx symbol)
-  // Available: x = 20 to 445 (width ~ 420 pt), y = 238 to 755 (height ~ 517 pt)
-  let medY = 238;
+  // 3. Left-Hand Column: Prescribed Medicines (Under Rx Symbol)
+  // Region: x = 35 to 445 (width = 410 pt), y = 290 down to 700
+  let medY = 290;
 
-  if (medicines.length === 0) {
-    p1.drawText("No medications prescribed for this visit.", {
-      x: 35,
-      y: yAt(medY),
-      size: 9,
-      font: helveticaOblique,
-      color: rgb(0.4, 0.45, 0.5),
-    });
-  } else {
-    medicines.forEach((med, idx) => {
-      if (medY > 730) return; // safety boundary
+  if (medicines && medicines.length > 0) {
+    medicines.slice(0, 10).forEach((med, idx) => {
+      if (!med.name || !med.name.trim()) return;
+      if (medY > 685) return;
 
-      const medFullName = [
-        med.name.trim(),
-        med.strength?.trim()
-      ].filter(Boolean).join(" ");
+      // Line 1: Number + Medicine Name + Strength
+      const numStr = `${idx + 1}.`;
+      drawP1Text(numStr, 35, medY, { font: helveticaBold, size: 9.5 });
 
-      // 1. Medicine Name & Number
-      p1.drawText(`${idx + 1}.  ${medFullName}`, {
-        x: 25,
-        y: yAt(medY),
-        size: 9.5,
+      const nameWithStrength = [med.name, med.strength].filter(Boolean).join(" ");
+      drawP1Text(nameWithStrength, 55, medY, {
         font: helveticaBold,
-        color: rgb(0.05, 0.25, 0.6),
+        size: 9.5,
+        color: rgb(0.01, 0.22, 0.45),
       });
-      medY += 14;
 
-      // 2. Dosage parsing & timing details
-      let dosageDisplay = med.dosage || "";
-      if (parseDosageFn && med.dosage) {
-        const parsed = parseDosageFn(med.dosage);
-        const times: string[] = [];
-        if (parsed.morning) times.push("Morning");
-        if (parsed.afternoon) times.push("Afternoon");
-        if (parsed.night) times.push("Night");
-        const timeStr = times.join(", ");
-        let mealStr = "";
-        if (parsed.beforeMeals) mealStr = "(Before Meals)";
-        else if (parsed.afterMeals) mealStr = "(After Meals)";
-        dosageDisplay = [med.dosage, timeStr, mealStr].filter(Boolean).join(" ");
+      // Quantity right-aligned on line 1 if available
+      if (med.quantity) {
+        const qtyStr = `Qty: ${med.quantity}`;
+        const qW = helveticaBold.widthOfTextAtSize(qtyStr, 8.5);
+        drawP1Text(qtyStr, 440 - qW, medY, {
+          font: helveticaBold,
+          size: 8.5,
+          color: rgb(0.3, 0.35, 0.4),
+        });
       }
 
-      const durationStr = med.duration?.trim() ? `Duration: ${med.duration.trim()}` : "";
-      const qtyStr = med.quantity?.trim() ? `Qty: ${med.quantity.trim()}` : "";
+      medY += 13;
 
-      const detailsLine = [
-        dosageDisplay ? `Dosage: ${dosageDisplay}` : "",
-        durationStr,
-        qtyStr
-      ].filter(Boolean).join("    |    ");
+      // Line 2: Dosage Schedule & Timing
+      let dosageDisplay = med.dosage || "";
+      let timingDisplay = "";
 
-      if (detailsLine) {
-        p1.drawText(detailsLine, {
-          x: 38,
-          y: yAt(medY),
+      if (parseDosageFn && med.dosage) {
+        const parsed = parseDosageFn(med.dosage);
+        const m = parsed.morning ? "1" : "0";
+        const a = parsed.afternoon ? "1" : "0";
+        const n = parsed.night ? "1" : "0";
+        dosageDisplay = `${m} - ${a} - ${n}`;
+        if (parsed.beforeMeals) timingDisplay = "Before Food";
+        else if (parsed.afterMeals) timingDisplay = "After Food";
+      }
+
+      const scheduleParts = [
+        dosageDisplay ? `[ ${dosageDisplay} ]` : "",
+        timingDisplay ? `(${timingDisplay})` : "",
+        med.duration ? `Duration: ${med.duration}` : "",
+      ].filter(Boolean);
+
+      if (scheduleParts.length > 0) {
+        drawP1Text(scheduleParts.join("   •   "), 55, medY, {
+          font: helveticaBold,
           size: 8.5,
-          font: helvetica,
-          color: textColor,
+          color: rgb(0.15, 0.25, 0.35),
         });
         medY += 12;
       }
 
-      // 3. Instructions
-      if (med.instructions?.trim()) {
-        const instLines = wrapText(`Inst: ${med.instructions.trim()}`, helveticaOblique, 8, 400);
-        instLines.slice(0, 2).forEach((inst) => {
-          p1.drawText(inst, {
-            x: 38,
-            y: yAt(medY),
-            size: 8,
+      // Line 3: Specific Instructions / Remarks
+      if (med.instructions && med.instructions.trim()) {
+        const instrLines = wrapText(med.instructions.trim(), helveticaOblique, 8, 385);
+        instrLines.slice(0, 2).forEach((iLine) => {
+          drawP1Text(`Note: ${iLine}`, 55, medY, {
             font: helveticaOblique,
-            color: rgb(0.3, 0.35, 0.45),
+            size: 8,
+            color: rgb(0.35, 0.4, 0.45),
           });
           medY += 10.5;
         });
       }
 
-      medY += 10; // spacing before next medicine
+      // Space between medicines
+      medY += 8;
     });
   }
 
-  // Page 2 (Post-treatment Telugu instructions) remains 100% untouched as part of the original template!
+  // Page 2: Telugu post-extraction care instructions (preserved untouched)
+
   return await doc.save();
 }
 
@@ -240,8 +273,8 @@ export async function generateAndDownloadPrescriptionPdf(
   options: GeneratePrescriptionPdfOptions
 ): Promise<void> {
   const bytes = await generatePrescriptionPdfBytes(options);
-  const patientName = options.patient.name.replace(/[^a-zA-Z0-9]/g, "_") || "Patient";
-  const filename = `32Smiles_Prescription_${patientName}_${options.patient.id}.pdf`;
+  const patientName = (options.patient.name || "Patient").replace(/[^a-zA-Z0-9]/g, "_");
+  const filename = `32Smiles_Prescription_${patientName}_${options.patient.id || "rec"}.pdf`;
   downloadPdfBytes(bytes, filename);
 }
 
@@ -252,5 +285,5 @@ export async function printPrescriptionPdf(
   options: GeneratePrescriptionPdfOptions
 ): Promise<void> {
   const blobUrl = await generatePrescriptionPdfBlobUrl(options);
-  printPdfBlob(blobUrl, `Prescription - ${options.patient.name}`);
+  printPdfBlob(blobUrl, `Prescription - ${options.patient.name || "Patient"}`);
 }

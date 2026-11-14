@@ -2,17 +2,23 @@ import { getAssetPath } from "./getAssetPath";
 
 export type TemplateType = "casesheet" | "prescription" | "invoice";
 
-const TEMPLATE_FILENAMES: Record<TemplateType, { original: string; staticFile: string }> = {
+/**
+ * Replacement PDF Templates:
+ * 1. Case Sheet: public/caseSheet.pdf
+ * 2. Prescription: public/prescription.pdf
+ * 3. Invoice: public/invoice.pdf
+ */
+const TEMPLATE_FILENAMES: Record<TemplateType, { relativePath: string; staticFile: string }> = {
   casesheet: {
-    original: "case sheet_merged.pdf",
-    staticFile: "case_sheet_merged.pdf",
+    relativePath: "public/caseSheet.pdf",
+    staticFile: "caseSheet.pdf",
   },
   prescription: {
-    original: "prescription_merged.pdf",
-    staticFile: "prescription_merged.pdf",
+    relativePath: "public/prescription.pdf",
+    staticFile: "prescription.pdf",
   },
   invoice: {
-    original: "invoice.pdf",
+    relativePath: "public/invoice.pdf",
     staticFile: "invoice.pdf",
   },
 };
@@ -21,9 +27,9 @@ const TEMPLATE_FILENAMES: Record<TemplateType, { original: string; staticFile: s
 const templateCache = new Map<TemplateType, Uint8Array>();
 
 /**
- * Loads the original PDF template bytes.
- * On server (Node.js/testing): reads directly from D:\32smilesdentalclinic\<file>.
- * On browser: fetches the static template asset using getAssetPath('/templates/<file>').
+ * Loads the replacement PDF template bytes.
+ * On server (Node.js/testing): reads directly from process.cwd() / public / <file>.
+ * On browser: fetches the static template asset using getAssetPath('/templates/<file>') or getAssetPath('/<file>').
  */
 export async function loadTemplateBytes(type: TemplateType): Promise<Uint8Array> {
   const cached = templateCache.get(type);
@@ -32,30 +38,30 @@ export async function loadTemplateBytes(type: TemplateType): Promise<Uint8Array>
     return new Uint8Array(cached);
   }
 
-  const { original, staticFile } = TEMPLATE_FILENAMES[type];
+  const { relativePath, staticFile } = TEMPLATE_FILENAMES[type];
 
   // 1. Server-side / Node.js testing environment
   if (typeof window === "undefined") {
     try {
-      // Dynamic require in Node environments
       const req = typeof eval !== "undefined" ? (eval as any)("require") : null;
       if (req) {
         const fs = req("fs");
         const path = req("path");
-        const rootPath = path.join(process.cwd(), original);
-        if (fs.existsSync(rootPath)) {
-          const buf = fs.readFileSync(rootPath);
-          const uint8 = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-          templateCache.set(type, uint8);
-          return new Uint8Array(uint8);
-        }
 
-        const publicPath = path.join(process.cwd(), "public", "templates", staticFile);
-        if (fs.existsSync(publicPath)) {
-          const buf = fs.readFileSync(publicPath);
-          const uint8 = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-          templateCache.set(type, uint8);
-          return new Uint8Array(uint8);
+        const candidates = [
+          path.join(process.cwd(), relativePath),
+          path.join(process.cwd(), "public", "templates", staticFile),
+          path.join(process.cwd(), "public", staticFile),
+          path.join(process.cwd(), staticFile),
+        ];
+
+        for (const cand of candidates) {
+          if (fs.existsSync(cand)) {
+            const buf = fs.readFileSync(cand);
+            const uint8 = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+            templateCache.set(type, uint8);
+            return new Uint8Array(uint8);
+          }
         }
       }
     } catch {
@@ -65,17 +71,29 @@ export async function loadTemplateBytes(type: TemplateType): Promise<Uint8Array>
 
   // 2. Client-side / browser runtime
   try {
-    const assetUrl = getAssetPath(`/templates/${staticFile}`);
-    const res = await fetch(assetUrl);
+    const urlsToTry = [
+      getAssetPath(`/templates/${staticFile}`),
+      getAssetPath(`/${staticFile}`),
+    ];
 
-    if (!res.ok) {
-      throw new Error(`Failed to load template "${type}" from ${assetUrl}. HTTP status: ${res.status}`);
+    let lastError: any = null;
+    for (const assetUrl of urlsToTry) {
+      try {
+        const res = await fetch(assetUrl);
+        if (res.ok) {
+          const arrayBuffer = await res.arrayBuffer();
+          const uint8 = new Uint8Array(arrayBuffer);
+          templateCache.set(type, uint8);
+          return new Uint8Array(uint8);
+        }
+      } catch (e) {
+        lastError = e;
+      }
     }
 
-    const arrayBuffer = await res.arrayBuffer();
-    const uint8 = new Uint8Array(arrayBuffer);
-    templateCache.set(type, uint8);
-    return new Uint8Array(uint8);
+    throw new Error(
+      lastError?.message || `Failed to fetch template "${type}" from static assets.`
+    );
   } catch (err: any) {
     console.error(`[PDF Template Loader] Client error loading template "${type}":`, err);
     throw new Error(`Failed to load PDF template for ${type}: ${err.message || String(err)}`);

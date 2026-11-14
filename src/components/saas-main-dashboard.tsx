@@ -244,6 +244,7 @@ interface Patient {
   emergencyContactPhone?: string;
   firstVisit?: string;
   preferredDentist?: string;
+  preferred_dentist?: string;
   createdAt?: string;
 }
 
@@ -321,6 +322,7 @@ interface BackupHistoryItem {
 
 interface TreatmentItem {
   id: string;
+  patientId?: string;
   name: string;
   patient: string;
   doctor: string;
@@ -1153,23 +1155,7 @@ export function getNextSequentialPatientId(patientsList: Array<{ id?: string; pa
   return nextNum.toString();
 }
 
-const DEFAULT_MOCK_PATIENTS = [
-  { id: "DS-1001", name: "Aarav Mehta", phone: "+91 98112 09230", age: 28, gender: "Male", address: "MG Road, Bengaluru", visit: "12 Aug 2026", medicalNotes: "Penicillin Allergy", balance: "₹0", status: "Active", dentalChart: { 16: "Root Canal Completed", 30: "Missing" }, prescriptions: ["Amoxicillin 500mg - 3x daily"], files: [{ name: "panorex_xray_mehta.png", size: "4.2 MB", type: "image/png" }], notes: ["Patient experiences cold sensitivity in lower left molar."] },
-  { id: "DS-1002", name: "Priya Patel", phone: "+91 99104 22091", age: 34, gender: "Female", address: "Indiranagar, Bengaluru", visit: "10 Aug 2026", medicalNotes: "None", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1003", name: "Kabir Singh", phone: "+91 98765 43210", age: 45, gender: "Male", address: "Koramangala, Bengaluru", visit: "08 Aug 2026", medicalNotes: "Latex Allergy, Hypertension", balance: "₹0", status: "Active", dentalChart: { 12: "Decayed" }, prescriptions: ["Paracetamol 650mg - as needed"], files: [], notes: ["Hypertension controlled under clinical prescription."] },
-  { id: "DS-1004", name: "Ananya Rao", phone: "+91 95400 12044", age: 19, gender: "Female", address: "Whitefield, Bengaluru", visit: "05 Aug 2026", medicalNotes: "None", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1005", name: "Rohan Kumar", phone: "+91 98100 44028", age: 31, gender: "Male", address: "HSR Layout, Bengaluru", visit: "12 Aug 2026", medicalNotes: "Sulfa Drugs Allergy", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1006", name: "Sneha Reddy", phone: "+91 95408 81229", age: 27, gender: "Female", address: "Jayanagar, Bengaluru", visit: "03 Aug 2026", medicalNotes: "None", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1007", name: "Rahul Verma", phone: "+91 98110 22912", age: 40, gender: "Male", address: "Malleshwaram, Bengaluru", visit: "28 Jul 2026", medicalNotes: "None", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1008", name: "Kavya Sharma", phone: "+91 99100 55109", age: 22, gender: "Female", address: "Hebbal, Bengaluru", visit: "25 Jul 2026", medicalNotes: "None", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1009", name: "Arjun Nair", phone: "+91 98760 12345", age: 36, gender: "Male", address: "Bannerghatta, Bengaluru", visit: "20 Jul 2026", medicalNotes: "Aspirin Sensitivity", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1010", name: "Neha Joshi", phone: "+91 95400 98765", age: 29, gender: "Female", address: "Sadashivanagar, Bengaluru", visit: "15 Jul 2026", medicalNotes: "None", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1011", name: "Vikram Malhotra", phone: "+91 98112 34567", age: 50, gender: "Male", address: "Ulsoor, Bengaluru", visit: "10 Jul 2026", medicalNotes: "Diabetes type 2", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1012", name: "Meera Nair", phone: "+91 99104 56789", age: 33, gender: "Female", address: "Cox Town, Bengaluru", visit: "05 Jul 2026", medicalNotes: "None", balance: "₹500", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1013", name: "Siddharth Roy", phone: "+91 98765 89012", age: 42, gender: "Male", address: "Frazer Town, Bengaluru", visit: "01 Jul 2026", medicalNotes: "None", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1014", name: "Aditi Rao", phone: "+91 95400 34567", age: 25, gender: "Female", address: "Kalyan Nagar, Bengaluru", visit: "25 Jun 2026", medicalNotes: "None", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] },
-  { id: "DS-1015", name: "Rajesh Khanna", phone: "+91 98100 90123", age: 60, gender: "Male", address: "Richmond Town, Bengaluru", visit: "15 Jun 2026", medicalNotes: "Penicillin Allergy", balance: "₹0", status: "Active", dentalChart: {}, prescriptions: [], files: [], notes: [] }
-];
+const DEFAULT_MOCK_PATIENTS: any[] = [];
 
 const DEFAULT_MOCK_MEDICINES: MedicineItem[] = INITIAL_MEDICINES_CATALOGUE.map((item, idx) => ({
   id: `med-${idx + 1}`,
@@ -1538,6 +1524,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
         return {
           id: t.id,
+          patientId: t.patient_id,
           name: t.name || "Consultation",
           patient: patRecord ? patRecord.name : "",
           doctor: docRecord ? docRecord.name : "",
@@ -2248,7 +2235,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [newPatAllergies, setNewPatAllergies] = useState("None");
 
   const [apptPatientId, setApptPatientId] = useState("");
-  const [apptDoctor, setApptDoctor] = useState("Dr. Deepa Kodali");
+  const [apptDoctor, setApptDoctor] = useState("");
   const [apptTreatment, setApptTreatment] = useState("Consultation");
   const [apptTime, setApptTime] = useState(() => getNextAvailableAppointmentSlot());
   const [apptDate, setApptDate] = useState(() => getTodayKolkataUiDate());
@@ -2357,7 +2344,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [slotPatientSearchQuery, setSlotPatientSearchQuery] = useState("");
   const slotPatientDropdownRef = useRef<HTMLDivElement | null>(null);
   const goToDateRef = useRef<HTMLInputElement | null>(null);
-  const [slotDoctor, setSlotDoctor] = useState("Dr. Deepa Kodali");
+  const [slotDoctor, setSlotDoctor] = useState("");
   const [slotTreatment, setSlotTreatment] = useState("Consultation");
 
   // Hover states for Month View cell popover
@@ -2378,37 +2365,10 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [noteTitle, setNoteTitle] = useState("");
   const [noteCategory, setNoteCategory] = useState("General");
   const [noteContent, setNoteContent] = useState("");
-  const [noteAuthor, setNoteAuthor] = useState("Dr. Deepa Kodali");
+  const [noteAuthor, setNoteAuthor] = useState("");
 
   // Media Gallery states
-  const [patientMedia, setPatientMedia] = useState<ClinicalMedia[]>([
-    {
-      id: "media-1",
-      patientId: "DS-1001",
-      name: "intraoral_photo_mehta.png",
-      type: "image/png",
-      category: "Clinical Photos",
-      url: "https://images.unsplash.com/photo-1606811971618-4486d14f3f99?q=80&w=600&auto=format&fit=crop",
-      uploadDate: "12 Aug 2026",
-      uploadedBy: "Dr. Deepa Kodali",
-      toothNumber: "16",
-      treatment: "Root Canal Therapy",
-      appointment: "12 Aug 2026 at 09:00 AM",
-      prescription: "Amoxicillin 500mg"
-    },
-    {
-      id: "media-2",
-      patientId: "DS-1001",
-      name: "patient_consent_recording.mp4",
-      type: "video/mp4",
-      category: "Consent Video Recordings",
-      url: "https://www.w3schools.com/html/mov_bbb.mp4",
-      uploadDate: "10 Aug 2026",
-      uploadedBy: "Dr. Deepa Kodali",
-      treatment: "Consultation",
-      appointment: "10 Aug 2026"
-    }
-  ]);
+  const [patientMedia, setPatientMedia] = useState<ClinicalMedia[]>([]);
   const [mediaFilter, setMediaFilter] = useState("All");
   const [selectedMediaForPreview, setSelectedMediaForPreview] = useState<ClinicalMedia | null>(null);
   const [mediaToEdit, setMediaToEdit] = useState<ClinicalMedia | null>(null);
@@ -2579,7 +2539,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       return;
     }
     const currentPat = patients.find(p => p.id === selectedPatientId);
-    const docName = prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali");
+    const docName = prescDoctor || currentPat?.preferredDentist || currentPat?.preferred_dentist || doctors[0]?.name || "";
     const durationStr = formatTimer(recordingSeconds);
 
     const newMedia: ClinicalMedia = {
@@ -2632,7 +2592,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   const [editMediaTreatment, setEditMediaTreatment] = useState("");
   const [editMediaAppointment, setEditMediaAppointment] = useState("");
   const [editMediaPrescription, setEditMediaPrescription] = useState("");
-  const [editMediaUploadedBy, setEditMediaUploadedBy] = useState("Dr. Deepa Kodali");
+  const [editMediaUploadedBy, setEditMediaUploadedBy] = useState("");
 
   useEffect(() => {
     if (mediaToEdit) {
@@ -2691,7 +2651,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           ? "https://www.w3schools.com/html/mov_bbb.mp4"
           : "https://images.unsplash.com/photo-1606811971618-4486d14f3f99?q=80&w=600&auto=format&fit=crop",
         uploadDate: new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
-        uploadedBy: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali")
+        uploadedBy: prescDoctor || currentPat?.preferredDentist || currentPat?.preferred_dentist || doctors[0]?.name || ""
       };
     });
 
@@ -2979,7 +2939,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
   };
 
   const [invoiceCustomId, setInvoiceCustomId] = useState("");
-  const [invoiceDoctor, setInvoiceDoctor] = useState("Dr. Deepa Kodali");
+  const [invoiceDoctor, setInvoiceDoctor] = useState("");
   const [invoiceTreatmentRows, setInvoiceTreatmentRows] = useState<MultiTreatmentRow[]>([
     { id: "row_1", description: "", quantity: 1, unitPrice: "", amount: 0 }
   ]);
@@ -3145,13 +3105,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
 
   const [patients, setPatients] = useState<Patient[]>([]);
 
-  const MOCK_APPOINTMENTS: Appointment[] = [
-    { id: "appt-1", patientId: "DS-1001", patientName: "Aarav Mehta", doctor: "Dr. Deepa Kodali", treatment: "Root Canal", time: "09:00 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Lower left molar treatment.", avatarColor: "bg-blue-100 text-blue-600" },
-    { id: "appt-2", patientId: "DS-1002", patientName: "Priya Patel", doctor: "Dr. Raghuram", treatment: "Scaling", time: "09:30 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Routine scale and polish.", avatarColor: "bg-cyan-100 text-cyan-600" },
-    { id: "appt-3", patientId: "DS-1003", patientName: "Kabir Singh", doctor: "Dr. Deepa Kodali", treatment: "Root Canal", time: "10:00 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Penicillin allergy precaution.", avatarColor: "bg-purple-100 text-purple-600" },
-    { id: "appt-4", patientId: "DS-1004", patientName: "Ananya Rao", doctor: "Dr. Srinivasa", treatment: "Implant", time: "10:30 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Surgical post review.", avatarColor: "bg-emerald-100 text-emerald-600" },
-    { id: "appt-5", patientId: "DS-1005", patientName: "Rohan Kumar", doctor: "Dr. Priyanka Mane Pado", treatment: "Crown", time: "11:00 AM", date: dynamicTodayUiDate, status: "Scheduled", notes: "Crown margins assessment.", avatarColor: "bg-indigo-100 text-indigo-600" }
-  ];
+  const MOCK_APPOINTMENTS: Appointment[] = [];
 
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [blockedSlotsList, setBlockedSlotsList] = useState<any[]>([]);
@@ -3527,7 +3481,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           id: insertedTreat.id,
           name: insertedTreat.name,
           patient: fullName,
-          doctor: editPreferredDentist || "Dr. Deepa Kodali",
+          doctor: editPreferredDentist || doctors[0]?.name || "",
           stage: "Planned",
           notes: editTreatmentAdvised.trim(),
           nextVisit: "",
@@ -4336,6 +4290,36 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       const patientItem = patients.find(p => p.id === selectedPatientId);
       if (!patientItem) return;
 
+      const completedTreatmentsForSheet = treatments
+        .filter(t => {
+          const isCurrentPat = (t.patientId && (t.patientId === patientItem.id || t.patientId === patientItem.uuid)) ||
+                               t.patient === patientItem.name;
+          return isCurrentPat && t.stage === "Completed";
+        })
+        .sort((a, b) => {
+          const dA = a.date ? new Date(a.date).getTime() : 0;
+          const dB = b.date ? new Date(b.date).getTime() : 0;
+          return dA - dB;
+        })
+        .map(t => ({
+          date: t.date || "",
+          treatmentDone: t.name || "",
+          remarks: t.notes || "",
+          stage: t.stage,
+        }));
+
+      const plannedTreatmentsForSheet = treatments
+        .filter(t => {
+          const isCurrentPat = (t.patientId && (t.patientId === patientItem.id || t.patientId === patientItem.uuid)) ||
+                               t.patient === patientItem.name;
+          return isCurrentPat && t.stage === "Planned" && (t.cost !== undefined && t.cost !== null);
+        })
+        .map((t, idx) => ({
+          sNo: idx + 1,
+          treatment: t.name || "",
+          cost: t.cost || 0,
+        }));
+
       setIsGeneratingCaseSheetPdf(true);
       try {
         const url = await generateCaseSheetPdfBlobUrl({
@@ -4348,7 +4332,9 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
           provisionalDiagnosis: editProvisionalDiagnosis,
           treatmentAdvised: formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised,
           visitDate: patientItem.visit || patientItem.firstVisit,
-          doctorName: doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S.",
+          doctorName: patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
+          completedTreatments: completedTreatmentsForSheet,
+          costItems: plannedTreatmentsForSheet,
         });
         if (!isCancelled) {
           setCaseSheetBlobUrl(prev => {
@@ -4378,6 +4364,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     editProvisionalDiagnosis,
     editTreatmentAdvised,
     patients,
+    treatments,
   ]);
 
   // 2. Prescription live overlay generator
@@ -4389,7 +4376,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       if (!patientItem) return;
 
       const currentData = activePrintPrescription || {
-        doctorName: prescDoctor || (doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S."),
+        doctorName: prescDoctor || patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
         date: prescDate,
         diagnosis: prescDiagnosis,
         medicines: prescMeds.filter(m => m.name.trim()),
@@ -4485,7 +4472,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     try {
       await printPrescriptionPdf({
         patient: patientItem,
-        doctorName: customData?.doctorName || prescDoctor || (doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S."),
+        doctorName: customData?.doctorName || prescDoctor || patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
         date: customData?.date || prescDate,
         diagnosis: customData?.diagnosis || prescDiagnosis,
         medicines: medsToUse,
@@ -4521,7 +4508,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     try {
       await generateAndDownloadPrescriptionPdf({
         patient: patientItem,
-        doctorName: customData?.doctorName || prescDoctor || (doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S."),
+        doctorName: customData?.doctorName || prescDoctor || patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
         date: customData?.date || prescDate,
         diagnosis: customData?.diagnosis || prescDiagnosis,
         medicines: medsToUse,
@@ -4542,6 +4529,36 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       return;
     }
 
+    const completedTreatmentsForSheet = treatments
+      .filter(t => {
+        const isCurrentPat = (t.patientId && (t.patientId === patientItem.id || t.patientId === patientItem.uuid)) ||
+                             t.patient === patientItem.name;
+        return isCurrentPat && t.stage === "Completed";
+      })
+      .sort((a, b) => {
+        const dA = a.date ? new Date(a.date).getTime() : 0;
+        const dB = b.date ? new Date(b.date).getTime() : 0;
+        return dA - dB;
+      })
+      .map(t => ({
+        date: t.date || "",
+        treatmentDone: t.name || "",
+        remarks: t.notes || "",
+        stage: t.stage,
+      }));
+
+    const plannedTreatmentsForSheet = treatments
+      .filter(t => {
+        const isCurrentPat = (t.patientId && (t.patientId === patientItem.id || t.patientId === patientItem.uuid)) ||
+                             t.patient === patientItem.name;
+        return isCurrentPat && t.stage === "Planned" && (t.cost !== undefined && t.cost !== null);
+      })
+      .map((t, idx) => ({
+        sNo: idx + 1,
+        treatment: t.name || "",
+        cost: t.cost || 0,
+      }));
+
     try {
       await printCaseSheetPdf({
         patient: patientItem,
@@ -4553,7 +4570,9 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         provisionalDiagnosis: editProvisionalDiagnosis,
         treatmentAdvised: formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised,
         visitDate: patientItem.visit || patientItem.firstVisit,
-        doctorName: doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S.",
+        doctorName: patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
+        completedTreatments: completedTreatmentsForSheet,
+        costItems: plannedTreatmentsForSheet,
       });
       showToast("Sent Case Sheet to printer.", "success");
     } catch (err) {
@@ -4569,6 +4588,36 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       return;
     }
 
+    const completedTreatmentsForSheet = treatments
+      .filter(t => {
+        const isCurrentPat = (t.patientId && (t.patientId === patientItem.id || t.patientId === patientItem.uuid)) ||
+                             t.patient === patientItem.name;
+        return isCurrentPat && t.stage === "Completed";
+      })
+      .sort((a, b) => {
+        const dA = a.date ? new Date(a.date).getTime() : 0;
+        const dB = b.date ? new Date(b.date).getTime() : 0;
+        return dA - dB;
+      })
+      .map(t => ({
+        date: t.date || "",
+        treatmentDone: t.name || "",
+        remarks: t.notes || "",
+        stage: t.stage,
+      }));
+
+    const plannedTreatmentsForSheet = treatments
+      .filter(t => {
+        const isCurrentPat = (t.patientId && (t.patientId === patientItem.id || t.patientId === patientItem.uuid)) ||
+                             t.patient === patientItem.name;
+        return isCurrentPat && t.stage === "Planned" && (t.cost !== undefined && t.cost !== null);
+      })
+      .map((t, idx) => ({
+        sNo: idx + 1,
+        treatment: t.name || "",
+        cost: t.cost || 0,
+      }));
+
     try {
       await generateAndDownloadCaseSheetPdf({
         patient: patientItem,
@@ -4580,7 +4629,9 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
         provisionalDiagnosis: editProvisionalDiagnosis,
         treatmentAdvised: formatTreatmentAdvisedFromChart(patientItem.dentalChart) || editTreatmentAdvised,
         visitDate: patientItem.visit || patientItem.firstVisit,
-        doctorName: doctors[0]?.name || "Dr. N. Shravan Krishna, B.D.S.",
+        doctorName: patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
+        completedTreatments: completedTreatmentsForSheet,
+        costItems: plannedTreatmentsForSheet,
       });
       showToast("Case Sheet PDF downloaded successfully.", "success");
     } catch (err) {
@@ -4673,7 +4724,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       id: newInvId,
       patientId: patientItem.id,
       patientName: patientItem.name,
-      doctor: doctors[0]?.name || "Dr. Deepa Kodali",
+      doctor: patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
       treatment: invProcedure.trim(),
       items: [{ description: invProcedure.trim(), amount: amt }],
       discount: disc,
@@ -4750,7 +4801,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       id: invId,
       patientId: patientItem.id,
       patientName: patientItem.name,
-      doctor: invoiceDoctor || doctors[0]?.name || "Dr. Deepa Kodali",
+      doctor: invoiceDoctor || patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
       treatment: treatmentSummary,
       items: itemsFormatted,
       discount: invoiceDiscountType === "percentage" ? (Number(invoiceDiscountValue) || 0) : Math.round((discountAmount / (subtotal || 1)) * 100),
@@ -6426,7 +6477,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     // Book and check in instantly
     const tokenStr = `T-0${appointments.filter(a => a.status === "Waiting" || a.status === "Checked In" || a.status === "In Procedure" || a.status === "Completed").length + 1}`;
 
-    const docRecord = doctors.find(d => d.name.toLowerCase().includes("sharma"));
+    const docRecord = doctors[0] || null;
     const doctorId = docRecord?.id || null;
 
     const { data: dbAppt, error: apptErr } = await supabase
@@ -6455,7 +6506,7 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
       id: dbAppt.id,
       patientId: insertedPat.patient_id,
       patientName: insertedPat.name,
-      doctor: docRecord ? docRecord.name : "Dr. Sharma",
+      doctor: docRecord ? docRecord.name : "",
       treatment: dbAppt.procedure_name || "Consultation",
       time: dbAppt.time_slot || "12:00 PM",
       date: convertToUiDate(dbAppt.appointment_date || ""),
@@ -7276,9 +7327,9 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     // Dynamic Chair Status Helper
     const activeProcedures = appointments.filter(a => a.date === activeDashboardDate && a.status === "In Procedure");
     const chairMap = [
-      { id: "Chair 1", doc: "Dr. Sharma", status: activeProcedures[0] ? `Occupied by ${activeProcedures[0].patientName}` : "Available", color: activeProcedures[0] ? "bg-orange-100 text-orange-700" : "bg-emerald-50 text-emerald-700" },
-      { id: "Chair 2", doc: "Dr. Priya", status: activeProcedures[1] ? `Occupied by ${activeProcedures[1].patientName}` : "Available", color: activeProcedures[1] ? "bg-orange-100 text-orange-700" : "bg-emerald-50 text-emerald-700" },
-      { id: "Chair 3", doc: "Dr. Rahul", status: activeProcedures[2] ? `Occupied by ${activeProcedures[2].patientName}` : "Available", color: activeProcedures[2] ? "bg-orange-100 text-orange-700" : "bg-emerald-50 text-emerald-700" }
+      { id: "Chair 1", doc: doctors[0]?.name || "Doctor", status: activeProcedures[0] ? `Occupied by ${activeProcedures[0].patientName}` : "Available", color: activeProcedures[0] ? "bg-orange-100 text-orange-700" : "bg-emerald-50 text-emerald-700" },
+      { id: "Chair 2", doc: doctors[1]?.name || (doctors[0]?.name || "Doctor"), status: activeProcedures[1] ? `Occupied by ${activeProcedures[1].patientName}` : "Available", color: activeProcedures[1] ? "bg-orange-100 text-orange-700" : "bg-emerald-50 text-emerald-700" },
+      { id: "Chair 3", doc: doctors[2]?.name || (doctors[0]?.name || "Doctor"), status: activeProcedures[2] ? `Occupied by ${activeProcedures[2].patientName}` : "Available", color: activeProcedures[2] ? "bg-orange-100 text-orange-700" : "bg-emerald-50 text-emerald-700" }
     ];
 
     // Collections by method today
@@ -7309,12 +7360,12 @@ export default function SaaSMainDashboard({ initialTab = "Dashboard" }: { initia
     };
 
     const handleQuickGenerateBill = async (pat: Patient) => {
-      const invoiceNum = `INV-${1000 + invoices.length + 1}`;
+      const invoiceNum = getNextInvoiceId();
       const newInvoice: InvoiceItem = {
         id: invoiceNum,
         patientId: pat.id,
         patientName: pat.name,
-        doctor: "Dr. Sharma",
+        doctor: pat.preferredDentist || pat.preferred_dentist || doctors[0]?.name || "",
         treatment: "Consultation",
         items: [{ description: "Consultation Fee", amount: 500 }],
         discount: 0,
@@ -8782,11 +8833,16 @@ ${clinicName}`;
                           return (
                             <div key={idx} className="rounded-lg bg-slate-50/20 border border-dashed border-slate-105 dark:border-slate-850 p-1.5 flex flex-col gap-1.5 overflow-hidden">
                               {slotAppts.map(appt => {
-                                let docBorderColor = "border-l-blue-500 bg-blue-50/25";
-                                if (appt.doctor.includes("Raghuram")) docBorderColor = "border-l-cyan-500 bg-cyan-50/25";
-                                else if (appt.doctor.includes("Srinivasa")) docBorderColor = "border-l-purple-500 bg-purple-50/25";
-                                else if (appt.doctor.includes("Priyanka")) docBorderColor = "border-l-emerald-505 bg-emerald-55/25";
-                                else if (appt.doctor.includes("Krishna")) docBorderColor = "border-l-indigo-500 bg-indigo-55/25";
+                                const palette = [
+                                  "border-l-blue-500 bg-blue-50/25",
+                                  "border-l-cyan-500 bg-cyan-50/25",
+                                  "border-l-purple-500 bg-purple-50/25",
+                                  "border-l-emerald-500 bg-emerald-50/25",
+                                  "border-l-indigo-500 bg-indigo-50/25",
+                                  "border-l-amber-500 bg-amber-50/25",
+                                ];
+                                const hash = (appt.doctor || "").split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
+                                const docBorderColor = palette[Math.abs(hash) % palette.length];
 
                                 return (
                                   <div
@@ -8834,11 +8890,16 @@ ${clinicName}`;
 
                         {slotAppt ? (
                           (() => {
-                            let docColor = "border-l-blue-500 bg-blue-50/15";
-                            if (slotAppt.doctor.includes("Raghuram")) docColor = "border-l-cyan-500 bg-cyan-50/15";
-                            else if (slotAppt.doctor.includes("Srinivasa")) docColor = "border-l-purple-500 bg-purple-50/15";
-                            else if (slotAppt.doctor.includes("Priyanka")) docColor = "border-l-emerald-500 bg-emerald-50/15";
-                            else if (slotAppt.doctor.includes("Krishna")) docColor = "border-l-indigo-500 bg-indigo-50/15";
+                            const palette = [
+                              "border-l-blue-500 bg-blue-50/15",
+                              "border-l-cyan-500 bg-cyan-50/15",
+                              "border-l-purple-500 bg-purple-50/15",
+                              "border-l-emerald-500 bg-emerald-50/15",
+                              "border-l-indigo-500 bg-indigo-50/15",
+                              "border-l-amber-500 bg-amber-50/15",
+                            ];
+                            const hash = (slotAppt.doctor || "").split("").reduce((acc, c) => acc + c.charCodeAt(0), 0);
+                            const docColor = palette[Math.abs(hash) % palette.length];
 
                             return (
                               <div
@@ -9442,7 +9503,7 @@ ${clinicName}`;
               category: row.category || effectiveCategory,
               subTreatment: row.sub_treatment || effectiveSub,
               patient: patientItem.name,
-              doctor: chartDoctor || doctors[0]?.name || "Dr. Deepa Kodali",
+              doctor: chartDoctor || patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
               stage: (row.stage === "Completed" || row.stage === "In Progress") ? row.stage : "Planned",
               notes: row.notes || "",
               nextVisit: "",
@@ -9463,7 +9524,7 @@ ${clinicName}`;
                 category: effectiveCategory,
                 subTreatment: effectiveSub,
                 patient: patientItem.name,
-                doctor: chartDoctor || doctors[0]?.name || "Dr. Deepa Kodali",
+                doctor: chartDoctor || patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
                 stage: (chartStatus === "Completed" || chartStatus === "In Progress") ? chartStatus : "Planned",
                 notes: chartNotes.trim() || "",
                 nextVisit: "",
@@ -11275,7 +11336,7 @@ ${clinicName}`;
                                     <option key={d.name} value={d.name}>{d.name}</option>
                                   ))
                                 ) : (
-                                  <option value="Dr. Deepa Kodali">Dr. Deepa Kodali</option>
+                                  <option value="">No Doctor Configured</option>
                                 )}
                               </select>
                             </div>
@@ -11750,7 +11811,7 @@ ${clinicName}`;
                           return;
                         }
                         setActivePrintPrescription({
-                          doctorName: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+                          doctorName: prescDoctor || patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
                           date: prescDate,
                           diagnosis: prescDiagnosis,
                           medicines: prescMeds.filter(m => m.name.trim()),
@@ -11920,7 +11981,7 @@ ${clinicName}`;
                               onClick={() => {
                                 const parsed = parsePrescriptionString(pr);
                                 setActivePrintPrescription({
-                                  doctorName: prescRec?.doctor_name || prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+                                  doctorName: prescRec?.doctor_name || prescDoctor || patientItem.preferredDentist || patientItem.preferred_dentist || doctors[0]?.name || "",
                                   date: prescRec?.prescription_date || "",
                                   diagnosis: prescRec?.diagnosis || "",
                                   medicines: [parsed],
@@ -11987,7 +12048,7 @@ ${clinicName}`;
                   if (!pItem) return null;
 
                   const currentData = activePrintPrescription || {
-                    doctorName: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+                    doctorName: prescDoctor || pItem.preferredDentist || pItem.preferred_dentist || doctors[0]?.name || "",
                     date: prescDate,
                     diagnosis: prescDiagnosis,
                     medicines: prescMeds.filter(m => m.name.trim()),
@@ -12551,7 +12612,7 @@ ${clinicName}`;
                   {/* Patient Metadata Info Header */}
                   {(() => {
                     const activePat = patients.find(p => p.id === selectedPatientId);
-                    const docName = prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali");
+                    const docName = prescDoctor || activePat?.preferredDentist || activePat?.preferred_dentist || doctors[0]?.name || "";
                     const todayDate = new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
                     const timeStr = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 
@@ -13913,7 +13974,7 @@ ${clinicName}`;
                             {doctors.length > 0 ? (
                               doctors.map(d => <option key={d.name} value={d.name}>{d.name}</option>)
                             ) : (
-                              <option value="Dr. Deepa Kodali">Dr. Deepa Kodali</option>
+                              <option value="">No Doctor Configured</option>
                             )}
                           </select>
                         </div>
@@ -17965,7 +18026,7 @@ ${clinicName}`;
             const pItem = patients.find(p => p.id === selectedPatientId);
             if (!pItem) return null;
             const dataToPrint = activePrintPrescription || {
-              doctorName: prescDoctor || (doctors[0]?.name || "Dr. Deepa Kodali"),
+              doctorName: prescDoctor || pItem.preferredDentist || pItem.preferred_dentist || doctors[0]?.name || "",
               date: prescDate,
               diagnosis: prescDiagnosis,
               medicines: prescMeds.filter(m => m.name.trim()),
